@@ -187,7 +187,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
 
   const [copied, setCopied] = useState(false);
-
+  const [history, setHistory] = useState([]);
   const [recording, setRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
 
@@ -245,6 +245,20 @@ export default function App() {
   };
 
   // ================= UPLOAD AUDIO =================
+  const API_URL = "http://localhost:5000";
+
+const fetchTranscriptions = async () => {
+  try {
+    const res = await axios.get(
+      `${API_URL}/transcriptions`
+    );
+
+    setHistory(res.data);
+
+  } catch (err) {
+    console.log(err);
+  }
+};
   const uploadAudio = async (audioFile) => {
     setLoading(true);
 
@@ -268,7 +282,7 @@ export default function App() {
       );
 
       setTranscription(res.data.transcription || "");
-
+      fetchTranscriptions();
       showToast("Transcription complete!", "success");
     } catch (err) {
       console.error(err);

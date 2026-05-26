@@ -190,6 +190,22 @@ app.post(
   }
 );
 
+app.get("/transcriptions", async (req, res) => {
+  try {
+    const transcriptions =
+      await Transcription.find()
+        .sort({ createdAt: -1 });
+
+    res.json(transcriptions);
+
+  } catch (error) {
+    console.log(error);
+
+    res.status(500).json({
+      message: "Error fetching transcriptions",
+    });
+  }
+});
 /* ────────────────────────────────────────────────────────── */
 /* Start Server */
 /* ────────────────────────────────────────────────────────── */
