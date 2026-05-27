@@ -182,3 +182,29 @@
     border-right-color: var(--border);
   }
 }
+
+/* Small UI polish styles */
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.65); }
+  50% { transform: scaleY(1); }
+}
+
+.wave-bar {
+  transform-origin: bottom center;
+  animation: wave 1.1s ease-in-out infinite;
+}
+
+@keyframes slideIn {
+  from { transform: translateY(-8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.toast-enter {
+  animation: slideIn 360ms cubic-bezier(.2,.9,.25,1);
+}
+
+.glass-soft {
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.04);
+  backdrop-filter: blur(8px) saturate(120%);
+}
+

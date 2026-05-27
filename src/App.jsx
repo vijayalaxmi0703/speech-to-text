@@ -1,632 +1,499 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import axios from "axios";
-
+import { useState, useRef, useEffect } from "react";
+import api from "./utils/api";
+import "./App.css";
 import {
   Mic,
   MicOff,
-  Upload,
-  FileAudio,
+  CloudUpload,
   Copy,
   Check,
-  RotateCcw,
   Loader2,
-  X,
+  RotateCcw,
   Sparkles,
-  Volume2,
-  AlertCircle,
-  ChevronRight,
+  Trash2,
 } from "lucide-react";
 
-// ================= BACKEND URL =================
+import Toast from "./components/Toast.jsx";
+import DropZone from "./components/DropZone.jsx";
+import Waveform from "./components/Waveform.jsx";
+import AudioPreview from "./components/AudioPreview.jsx";
+import HistoryCard from "./components/HistoryCard.jsx";
+
 const API_URL = "http://localhost:5000";
 
-// ================= TOAST =================
-const Toast = ({ message, type, onClose }) => {
-  useEffect(() => {
-    const t = setTimeout(onClose, 3500);
-    return () => clearTimeout(t);
-  }, [onClose]);
-
-  const colors =
-    type === "success"
-      ? "from-emerald-500/20 to-teal-500/20 border-emerald-500/30 text-emerald-300"
-      : "from-red-500/20 to-rose-500/20 border-red-500/30 text-red-300";
-
-  return (
-    <div
-      className={`fixed top-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl border bg-gradient-to-r backdrop-blur-xl shadow-2xl ${colors}`}
-    >
-      {type === "success" ? (
-        <Check size={17} />
-      ) : (
-        <AlertCircle size={17} />
-      )}
-
-      <span className="text-sm font-medium">{message}</span>
-
-      <button onClick={onClose}>
-        <X size={14} />
-      </button>
-    </div>
-  );
-};
-
-// ================= WAVEFORM =================
-const WaveformBars = () => (
-  <div className="flex items-end gap-[3px] h-7">
-    {[1, 2, 3, 4, 5, 4, 3].map((h, i) => (
-      <span
-        key={i}
-        className="w-[3px] rounded-full bg-rose-400"
-        style={{
-          animation: `wave 1.1s ease-in-out infinite`,
-          animationDelay: `${i * 0.1}s`,
-          height: `${h * 20}%`,
-        }}
-      />
-    ))}
-  </div>
-);
-
-// ================= DROPZONE =================
-const DropZone = ({ onFileSelect, selectedFile, onClear }) => {
-  const [dragging, setDragging] = useState(false);
-  const inputRef = useRef(null);
-
-  const handleDrop = useCallback(
-    (e) => {
-      e.preventDefault();
-      setDragging(false);
-
-      const file = e.dataTransfer.files[0];
-
-      if (file && file.type.startsWith("audio/")) {
-        onFileSelect(file);
-      }
-    },
-    [onFileSelect]
-  );
-
-  return (
-    <div
-      onDrop={handleDrop}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragging(true);
-      }}
-      onDragLeave={() => setDragging(false)}
-      onClick={() => !selectedFile && inputRef.current?.click()}
-      className={`
-        relative rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer
-        ${
-          selectedFile
-            ? "border-violet-500/40 bg-violet-500/5"
-            : dragging
-            ? "border-violet-400 bg-violet-500/10"
-            : "border-white/10 bg-white/[0.03]"
-        }
-      `}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept="audio/*"
-        className="hidden"
-        onChange={(e) =>
-          e.target.files[0] && onFileSelect(e.target.files[0])
-        }
-      />
-
-      {selectedFile ? (
-        <div className="flex items-center gap-4 p-5">
-          <div className="w-11 h-11 rounded-xl bg-violet-500/15 flex items-center justify-center">
-            <FileAudio size={22} className="text-violet-400" />
-          </div>
-
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-white/90 truncate">
-              {selectedFile.name}
-            </p>
-
-            <p className="text-xs text-white/40 mt-0.5">
-              {(selectedFile.size / 1024).toFixed(1)} KB
-            </p>
-          </div>
-
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onClear();
-            }}
-            className="w-8 h-8 rounded-lg bg-white/5 hover:bg-rose-500/20"
-          >
-            <X size={15} />
-          </button>
-        </div>
-      ) : (
-        <div className="flex flex-col items-center justify-center gap-3 py-10 px-6 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center">
-            <Upload size={24} className="text-white/30" />
-          </div>
-
-          <div>
-            <p className="text-sm font-medium text-white/70">
-              Drop your audio file here
-            </p>
-
-            <p className="text-xs text-white/30 mt-1">
-              MP3, WAV, WEBM supported
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ================= AUDIO PREVIEW =================
-const AudioPreview = ({ src }) => (
-  <div className="mt-3 flex items-center gap-3 px-4 py-3 rounded-xl bg-white/[0.04] border border-white/10">
-    <Volume2 size={16} className="text-violet-400" />
-
-    <audio src={src} controls className="flex-1 h-7" />
-  </div>
-);
-
-// ================= MAIN APP =================
 export default function App() {
-  // ================= STATES =================
   const [selectedFile, setSelectedFile] = useState(null);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState(null);
-
   const [transcription, setTranscription] = useState("");
   const [loading, setLoading] = useState(false);
-
   const [error, setError] = useState(null);
-
   const [toast, setToast] = useState(null);
-
   const [copied, setCopied] = useState(false);
   const [history, setHistory] = useState([]);
   const [recording, setRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
+  const [serverStatus, setServerStatus] = useState("Checking...");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [deleteId, setDeleteId] = useState(null);
 
-  const [serverStatus, setServerStatus] =
-    useState("Checking backend...");
-
-  // ================= REFS =================
   const mediaRecorderRef = useRef(null);
-
   const audioChunksRef = useRef([]);
-
   const timerRef = useRef(null);
 
-  // ================= CHECK BACKEND =================
   useEffect(() => {
-    axios
-      .get(API_URL)
-      .then(() => {
+    const checkBackend = async () => {
+      try {
+        await api.get("/", { timeout: 4500 });
         setServerStatus("Backend Connected");
-      })
-      .catch(() => {
+        await fetchTranscriptions();
+      } catch (err) {
         setServerStatus("Backend Offline");
-      });
+      }
+    };
+
+    checkBackend();
+
+    return () => clearInterval(timerRef.current);
   }, []);
 
-  // ================= HELPERS =================
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
   const showToast = (message, type = "success") => {
     setToast({ message, type });
   };
 
-  const formatTime = (s) =>
-    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(
-      s % 60
+  const formatTime = (seconds) =>
+    `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(
+      seconds % 60
     ).padStart(2, "0")}`;
 
-  // ================= FILE SELECT =================
-  const handleFileSelect = (file) => {
-    setSelectedFile(file);
-
-    setAudioPreviewUrl(URL.createObjectURL(file));
-
-    setError(null);
-
-    setTranscription("");
+  const formatDate = (value) => {
+    if (!value) return "";
+    return new Date(value).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   };
 
-  const handleClearFile = () => {
-    setSelectedFile(null);
-
-    setAudioPreviewUrl(null);
-
-    setTranscription("");
-
-    setError(null);
+  const fetchTranscriptions = async () => {
+    try {
+      setHistoryLoading(true);
+      const response = await api.get(`/transcriptions`, {
+        timeout: 10000,
+      });
+      setHistory(
+        response.data.map((item) => ({
+          ...item,
+          createdAt: formatDate(item.createdAt),
+        }))
+      );
+    } catch (err) {
+      console.error(err);
+      if (serverStatus !== "Backend Offline") {
+        showToast("Unable to fetch history. Check the backend.", "error");
+      }
+    } finally {
+      setHistoryLoading(false);
+    }
   };
 
-  // ================= UPLOAD AUDIO =================
-  const API_URL = "http://localhost:5000";
-
-const fetchTranscriptions = async () => {
-  try {
-    const res = await axios.get(
-      `${API_URL}/transcriptions`
-    );
-
-    setHistory(res.data);
-
-  } catch (err) {
-    console.log(err);
-  }
-};
   const uploadAudio = async (audioFile) => {
     setLoading(true);
-
     setError(null);
-
     setTranscription("");
 
     const formData = new FormData();
-
     formData.append("audio", audioFile);
 
     try {
-      const res = await axios.post(
-        `${API_URL}/upload`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
+      const response = await api.post(`/upload`, formData, {
+        headers: {
+          "Content-Type": "multipart/form-data",
+        },
+        timeout: 120000,
+      });
 
-      setTranscription(res.data.transcription || "");
-      fetchTranscriptions();
+      setTranscription(response.data.transcription || "");
       showToast("Transcription complete!", "success");
+      await fetchTranscriptions();
     } catch (err) {
       console.error(err);
-
-      const msg =
-        err.response?.data?.message ||
-        "Upload failed. Please check backend.";
-
-      setError(msg);
-
-      showToast(msg, "error");
+      const message =
+        err.response?.data?.message || err.message ||
+        "Upload failed. Please check your connection.";
+      setError(message);
+      showToast(message, "error");
     } finally {
       setLoading(false);
     }
   };
 
-  // ================= HANDLE UPLOAD =================
   const handleUpload = () => {
     if (!selectedFile) {
-      showToast("Please select audio first.", "error");
+      showToast("Please select an audio file first.", "error");
+      return;
+    }
+
+    if (!selectedFile.type.startsWith("audio/")) {
+      showToast("Unsupported file type. Upload audio only.", "error");
       return;
     }
 
     uploadAudio(selectedFile);
   };
 
-  // ================= START RECORDING =================
+  const handleFileSelect = (file) => {
+    setSelectedFile(file);
+    setAudioPreviewUrl(URL.createObjectURL(file));
+    setError(null);
+    setTranscription("");
+  };
+
+  const handleClearFile = () => {
+    setSelectedFile(null);
+    setAudioPreviewUrl(null);
+    setTranscription("");
+    setError(null);
+  };
+
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm;codecs=opus",
       });
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: "audio/webm",
-      });
-
-      mediaRecorderRef.current = mediaRecorder;
-
+      mediaRecorderRef.current = recorder;
       audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (event) => {
+      recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
-      mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, {
+      recorder.onstop = async () => {
+        const blob = new Blob(audioChunksRef.current, {
           type: "audio/webm",
         });
 
-        const audioFile = new File(
-          [audioBlob],
-          "recording.webm",
-          {
-            type: "audio/webm",
-          }
-        );
+        const audioFile = new File([blob], "recording.webm", {
+          type: "audio/webm",
+        });
 
         setSelectedFile(audioFile);
-
-        setAudioPreviewUrl(URL.createObjectURL(audioBlob));
-
+        setAudioPreviewUrl(URL.createObjectURL(blob));
         await uploadAudio(audioFile);
-
         stream.getTracks().forEach((track) => track.stop());
       };
 
-      mediaRecorder.start();
-
+      recorder.start();
       setRecording(true);
-
       setRecordingTime(0);
-
-      timerRef.current = setInterval(() => {
+      timerRef.current = window.setInterval(() => {
         setRecordingTime((prev) => prev + 1);
       }, 1000);
     } catch (err) {
       console.error(err);
-
       showToast(
-        "Microphone access denied. Allow microphone permission.",
+        "Microphone access denied. Please allow access and retry.",
         "error"
       );
     }
   };
 
-  // ================= STOP RECORDING =================
   const stopRecording = () => {
-    mediaRecorderRef.current?.stop();
-
+    if (mediaRecorderRef.current?.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
     setRecording(false);
-
     clearInterval(timerRef.current);
   };
 
-  // ================= COPY =================
-  const copyTranscription = () => {
-    navigator.clipboard.writeText(transcription);
+  const copyTranscription = async (text = transcription) => {
+    if (!text) return;
 
-    setCopied(true);
-
-    showToast("Copied to clipboard!");
-
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      showToast("Copied to clipboard!", "success");
+      setTimeout(() => setCopied(false), 1800);
+    } catch (err) {
+      showToast("Unable to copy. Try again.", "error");
+    }
   };
 
-  // ================= RESET =================
-  const reset = () => {
+  const deleteTranscription = async (id) => {
+    try {
+      setDeleteId(id);
+      await api.delete(`/transcriptions/${id}`, {
+        timeout: 10000,
+      });
+      showToast("Transcript deleted.", "success");
+      await fetchTranscriptions();
+    } catch (err) {
+      console.error(err);
+      showToast("Could not delete the transcript.", "error");
+    } finally {
+      setDeleteId(null);
+    }
+  };
+
+  const resetAll = () => {
     handleClearFile();
-
     setRecording(false);
-
     setRecordingTime(0);
-
+    setCopied(false);
     setError(null);
-
-    setTranscription("");
-
     clearInterval(timerRef.current);
   };
 
-  // ================= CLEANUP =================
-  useEffect(() => {
-    return () => clearInterval(timerRef.current);
-  }, []);
+  const isBackendOnline = serverStatus === "Backend Connected";
 
-  // ================= UI =================
   return (
-    <>
-      <style>{`
-        body {
-          margin: 0;
-          background: #080b14;
-          font-family: sans-serif;
-        }
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(124,58,237,0.16),_transparent_28%),_radial-gradient(circle_at_top_right,_rgba(34,211,238,0.12),_transparent_20%),_linear-gradient(180deg,_#04050d_0%,_#090d18_100%)] text-white">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
 
-        @keyframes wave {
-          0%,100% { transform: scaleY(0.4); }
-          50% { transform: scaleY(1); }
-        }
-      `}</style>
+      <div className="mx-auto flex max-w-7xl flex-col gap-10 px-4 py-8 md:px-6 lg:px-8">
+        <section className="relative overflow-hidden rounded-[40px] border border-white/10 bg-slate-950/80 p-8 shadow-[0_50px_150px_-60px_rgba(59,130,246,0.3)] backdrop-blur-2xl">
+          <div className="absolute -right-16 top-0 h-72 w-72 rounded-full bg-violet-500/10 blur-3xl" />
+          <div className="absolute left-0 top-20 h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl" />
 
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
-
-      <div className="min-h-screen flex items-center justify-center px-4 py-10 bg-[#080b14]">
-        <div className="w-full max-w-2xl">
-
-          {/* HEADER */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 text-violet-300 text-xs mb-4">
-              <Sparkles size={12} />
-              AI Speech Recognition
-            </div>
-
-            <h1 className="text-5xl font-bold text-white">
-              Voice to Text
-            </h1>
-
-            <p className="text-white/40 mt-3">
-              Upload or record audio — get accurate transcriptions instantly.
-            </p>
-
-            {/* SERVER STATUS */}
-            <p
-              className={`text-xs mt-3 ${
-                serverStatus === "Backend Connected"
-                  ? "text-green-400"
-                  : "text-red-400"
-              }`}
-            >
-              {serverStatus}
-            </p>
-          </div>
-
-          {/* CARD */}
-          <div className="rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl p-6 space-y-6">
-
-            {/* UPLOAD */}
-            <div>
-              <div className="flex items-center gap-2 mb-3 text-white/60 text-sm">
-                <Upload size={14} />
-                Upload Audio
+          <div className="relative z-10 grid gap-8 lg:grid-cols-[1.3fr_0.9fr]">
+            <div className="space-y-6">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.28em] text-cyan-200/90 shadow-[0_0_0_1px_rgba(255,255,255,0.04)]">
+                <Sparkles size={14} /> AI badge
+              </div>
+              <div className="space-y-4">
+                <h1 className="text-4xl font-black leading-tight text-transparent bg-clip-text bg-gradient-to-r from-fuchsia-300 via-cyan-200 to-white sm:text-5xl">
+                  Transform speech into search-ready text with a futuristic AI dashboard.
+                </h1>
+                <p className="max-w-2xl text-sm leading-7 text-slate-300 sm:text-base">
+                  Upload audio, record live voice, and manage every transcription through a responsive premium interface.
+                </p>
               </div>
 
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
+                  <p className="text-[10px] uppercase tracking-[0.28em] text-slate-400">Backend status</p>
+                  <p className={`mt-3 text-sm font-semibold ${isBackendOnline ? "text-emerald-300" : "text-rose-300"}`}>
+                    {serverStatus}
+                  </p>
+                </div>
+                <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
+                  <p className="text-[10px] uppercase tracking-[0.28em] text-slate-400">Transcript count</p>
+                  <p className="mt-3 text-sm font-semibold text-white/80">{history.length} saved</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[32px] border border-white/10 bg-white/5 p-6 shadow-2xl shadow-slate-950/20">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.3em] text-slate-400">Live AI flow</p>
+                  <p className="mt-3 text-lg font-semibold text-white">Ready to convert audio instantly.</p>
+                </div>
+                <div className="grid h-14 w-14 place-items-center rounded-3xl bg-violet-500/10 text-violet-300">
+                  <CloudUpload size={22} />
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-3 rounded-[28px] border border-white/10 bg-slate-950/80 p-4 text-sm text-slate-300">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl bg-white/5 text-cyan-300">1</span>
+                  Drop or upload audio.
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl bg-white/5 text-fuchsia-300">2</span>
+                  Record with the mic button.
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-2xl bg-white/5 text-emerald-300">3</span>
+                  Save transcripts automatically.
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+          <div className="space-y-6 rounded-[38px] border border-white/10 bg-slate-950/80 p-6 shadow-[0_40px_120px_-40px_rgba(15,23,42,0.9)] backdrop-blur-xl">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm uppercase tracking-[0.28em] text-cyan-300/80">Source control</p>
+                <h2 className="mt-3 text-2xl font-semibold text-white">Upload or record audio with confidence.</h2>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-3xl border border-white/10 bg-white/5 px-4 py-3 text-xs uppercase tracking-[0.24em] text-white/60 shadow-inner shadow-slate-950/20">
+                <span className="grid h-9 w-9 place-items-center rounded-2xl bg-cyan-500/10 text-cyan-300">
+                  <CloudUpload size={18} />
+                </span>
+                Fast uploads
+              </div>
+            </div>
+
+            <div className="space-y-6">
               <DropZone
                 onFileSelect={handleFileSelect}
                 selectedFile={selectedFile}
                 onClear={handleClearFile}
+                disabled={loading || recording}
               />
 
-              {audioPreviewUrl && !recording && (
-                <AudioPreview src={audioPreviewUrl} />
-              )}
+              {audioPreviewUrl && !recording && <AudioPreview src={audioPreviewUrl} />}
 
-              <button
-                onClick={handleUpload}
-                disabled={!selectedFile || loading || recording}
-                className="mt-4 w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 hover:bg-violet-700 text-white font-semibold disabled:opacity-40"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" />
-                    Transcribing...
-                  </>
-                ) : (
-                  <>
-                    Transcribe File
-                    <ChevronRight size={16} />
-                  </>
-                )}
-              </button>
-            </div>
-
-            {/* RECORD */}
-            <div>
-              <div className="flex items-center gap-2 mb-3 text-white/60 text-sm">
-                <Mic size={14} />
-                Live Recording
-              </div>
-
-              <div className="flex items-center gap-4 p-4 rounded-2xl border border-white/10 bg-white/[0.03]">
-
+              <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
                 <button
-                  onClick={recording ? stopRecording : startRecording}
-                  disabled={loading}
-                  className={`w-14 h-14 rounded-2xl flex items-center justify-center ${
-                    recording
-                      ? "bg-red-500"
-                      : "bg-emerald-500"
-                  }`}
+                  type="button"
+                  onClick={handleUpload}
+                  disabled={!selectedFile || loading || recording || !isBackendOnline}
+                  className="group inline-flex items-center justify-center overflow-hidden rounded-3xl bg-gradient-to-r from-violet-500 via-fuchsia-500 to-cyan-400 px-6 py-4 text-sm font-semibold text-slate-950 transition duration-300 hover:-translate-y-0.5 hover:shadow-[0_16px_42px_rgba(124,58,237,0.35)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {recording ? (
-                    <MicOff className="text-white" />
+                  {loading ? (
+                    <>
+                      <Loader2 size={16} className="mr-2 animate-spin" />
+                      Transcribing...
+                    </>
                   ) : (
-                    <Mic className="text-white" />
+                    <>
+                      <CloudUpload size={16} className="mr-2" />
+                      Transcribe File
+                    </>
                   )}
                 </button>
 
-                <div className="flex-1">
-                  {recording ? (
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-rose-300 font-semibold">
-                          Recording...
-                        </p>
+                <button
+                  type="button"
+                  onClick={recording ? stopRecording : startRecording}
+                  disabled={loading || !isBackendOnline}
+                  className={`inline-flex min-h-[56px] min-w-[56px] items-center justify-center rounded-3xl px-5 text-sm font-semibold transition ${
+                    recording
+                      ? "bg-rose-500 text-white shadow-[0_20px_80px_rgba(248,113,113,0.25)]"
+                      : "bg-emerald-400 text-slate-950 shadow-[0_20px_80px_rgba(34,197,94,0.25)]"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {recording ? <MicOff size={24} /> : <Mic size={24} />}
+                </button>
+              </div>
 
-                        <p className="text-white/40 text-xs">
-                          {formatTime(recordingTime)}
-                        </p>
-                      </div>
-
-                      <WaveformBars />
-                    </div>
-                  ) : (
-                    <div>
-                      <p className="text-white/70">
-                        Ready to record
-                      </p>
-
-                      <p className="text-white/30 text-xs">
-                        Click mic button
-                      </p>
-                    </div>
-                  )}
+              <div className="rounded-[30px] border border-white/10 bg-white/5 p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Live microphone recording</p>
+                    <p className="text-xs text-slate-400">Tap the mic to start or stop audio capture anytime.</p>
+                  </div>
+                  <div className="inline-flex items-center gap-3 rounded-3xl bg-slate-950/60 px-4 py-3 text-sm text-white/70">
+                    <span className={`h-3 w-3 rounded-full ${recording ? "bg-rose-400 animate-pulse" : "bg-emerald-300"}`} />
+                    {recording ? `Recording • ${formatTime(recordingTime)}` : "Ready to capture"}
+                  </div>
+                </div>
+                <div className="mt-5 rounded-[28px] border border-white/10 bg-slate-950/80 p-5">
+                  <Waveform />
                 </div>
               </div>
+
+              {error && (
+                <div className="rounded-3xl border border-rose-400/20 bg-rose-500/10 p-4 text-sm text-rose-100">
+                  {error}
+                </div>
+              )}
             </div>
-
-            {/* ERROR */}
-            {error && (
-              <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-sm">
-                {error}
-              </div>
-            )}
-
-            {/* TRANSCRIPTION */}
-            {(transcription || loading) && (
-              <div className="border-t border-white/10 pt-6">
-
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-white font-semibold">
-                    Transcription
-                  </h2>
-
-                  {transcription && (
-                    <button
-                      onClick={copyTranscription}
-                      className="text-xs text-white/60 hover:text-white flex items-center gap-1"
-                    >
-                      {copied ? (
-                        <>
-                          <Check size={12} />
-                          Copied
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={12} />
-                          Copy
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                <div className="p-4 rounded-xl bg-black/20 border border-white/10 text-white/80 text-sm min-h-[120px]">
-                  {loading ? (
-                    <div className="flex items-center gap-2">
-                      <Loader2
-                        size={16}
-                        className="animate-spin"
-                      />
-
-                      Analyzing audio...
-                    </div>
-                  ) : (
-                    transcription
-                  )}
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* RESET */}
-          {(selectedFile || transcription) && (
-            <div className="flex justify-center mt-5">
+          <div className="space-y-6 rounded-[38px] border border-white/10 bg-slate-950/80 p-6 shadow-[0_40px_120px_-40px_rgba(15,23,42,0.9)] backdrop-blur-xl">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm uppercase tracking-[0.24em] text-cyan-300/80">Transcription output</p>
+                <h2 className="mt-3 text-2xl font-semibold text-white">Beautiful text results</h2>
+              </div>
               <button
-                onClick={reset}
-                className="flex items-center gap-2 text-white/40 hover:text-white text-sm"
+                type="button"
+                onClick={() => copyTranscription()}
+                disabled={!transcription}
+                className="inline-flex items-center gap-2 rounded-3xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white/80 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <RotateCcw size={14} />
-                Reset Everything
+                {copied ? <Check size={16} /> : <Copy size={16} />}
+                {copied ? "Copied" : "Copy result"}
               </button>
             </div>
+
+            <div className="rounded-[30px] border border-white/10 bg-slate-950/70 p-6 min-h-[220px] text-sm leading-7 text-white/70">
+              {loading ? (
+                <div className="flex items-center gap-3 text-white/60">
+                  <Loader2 size={18} className="animate-spin" />
+                  Analyzing audio and generating your transcript...
+                </div>
+              ) : transcription ? (
+                <p className="whitespace-pre-wrap break-words">{transcription}</p>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-white/50">Your transcript will appear here once the audio processing completes.</p>
+                  <p className="text-xs text-white/30">Upload a file or record live audio to begin.</p>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={resetAll}
+              className="w-full rounded-3xl border border-white/10 bg-white/5 px-5 py-4 text-sm font-semibold text-white/80 transition hover:border-cyan-300/30 hover:text-white"
+            >
+              <RotateCcw size={16} className="inline-block mr-2" /> Reset workspace
+            </button>
+          </div>
+        </section>
+
+        <section className="space-y-6 rounded-[38px] border border-white/10 bg-slate-950/80 p-6 shadow-[0_40px_120px_-40px_rgba(15,23,42,0.85)] backdrop-blur-xl">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-[0.24em] text-cyan-300/80">Transcript history</p>
+              <h2 className="mt-3 text-3xl font-semibold text-white">Saved transcripts</h2>
+            </div>
+            <p className="text-sm text-white/50">Auto-refreshes after upload, record, and delete.</p>
+          </div>
+
+          {historyLoading ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {[...Array(3)].map((_, index) => (
+                <div key={index} className="animate-pulse rounded-[28px] border border-white/10 bg-white/5 p-5">
+                  <div className="h-4 w-2/5 rounded-full bg-white/10" />
+                  <div className="mt-4 space-y-3">
+                    <div className="h-3 rounded-full bg-white/10" />
+                    <div className="h-3 rounded-full bg-white/10" />
+                    <div className="h-3 rounded-full bg-white/10" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : history.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {history.map((entry) => (
+                <div key={entry._id}>
+                  <HistoryCard
+                    entry={entry}
+                    onCopy={copyTranscription}
+                    onDelete={deleteTranscription}
+                    deleting={deleteId === entry._id}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-[28px] border border-white/10 bg-slate-950/40 p-8 text-center text-white/60">
+              <p className="text-lg font-semibold text-white">Your history is empty.</p>
+              <p className="mt-3 text-sm text-white/40">
+                Start by uploading a file or recording live audio to save transcripts automatically.
+              </p>
+            </div>
           )}
-        </div>
+        </section>
       </div>
-    </>
+    </div>
   );
 }
