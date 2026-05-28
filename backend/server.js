@@ -206,6 +206,19 @@ app.get("/transcriptions", async (req, res) => {
     });
   }
 });
+app.use((err, req, res, next) => {
+  console.error(err);
+
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({
+      message: "File size too large. Max 10MB allowed.",
+    });
+  }
+
+  return res.status(400).json({
+    message: err.message || "Something went wrong",
+  });
+});
 /* ────────────────────────────────────────────────────────── */
 /* Start Server */
 /* ────────────────────────────────────────────────────────── */
