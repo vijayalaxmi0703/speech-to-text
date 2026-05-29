@@ -7,12 +7,33 @@ const api = axios.create({
   timeout: 60000,
 });
 
+api.interceptors.request.use(
+  (config) => {
+    const token =
+      localStorage.getItem("authToken") || sessionStorage.getItem("authToken");
+
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    // normalize errors for callers
-    const error = err?.response?.data?.message || err.message || "Network error";
-    return Promise.reject(new Error(error));
+    const message = err?.response?.data?.message || err.message || "Network error";
+
+    if (err?.response?.status === 401) {
+      localStorage.removeItem("authToken");
+      localStorage.removeItem("authUser");
+      sessionStorage.removeItem("authToken");
+      sessionStorage.removeItem("authUser");
+    }
+
+    return Promise.reject(new Error(message));
   }
 );
 

@@ -17,6 +17,7 @@ import DropZone from "./components/DropZone.jsx";
 import Waveform from "./components/Waveform.jsx";
 import AudioPreview from "./components/AudioPreview.jsx";
 import HistoryCard from "./components/HistoryCard.jsx";
+import { useAuth } from "./context/AuthContext.jsx";
 
 const API_URL = "http://localhost:5000";
 
@@ -319,6 +320,7 @@ export default function App() {
     clearInterval(timerRef.current);
   };
 
+  const { user, logout } = useAuth();
   const isBackendOnline =
     serverStatus === "Backend Connected";
 

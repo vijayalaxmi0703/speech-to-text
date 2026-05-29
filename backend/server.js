@@ -6,6 +6,10 @@ const fs = require("fs");
 const path = require("path");
 const { Deepgram } = require("@deepgram/sdk");
 
+const authRoutes = require("./routes/auth");
+const { authMiddleware } = require("./middleware/authMiddleware");
+const Transcription = require("./models/Transcription");
+
 require("dotenv").config();
 
 const app = express();
@@ -26,26 +30,6 @@ mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
-
-/* ────────────────────────────────────────────────────────── */
-/* Schema */
-/* ────────────────────────────────────────────────────────── */
-
-const transcriptionSchema = new mongoose.Schema({
-  filename: String,
-
-  transcription: String,
-
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
-});
-
-const Transcription = mongoose.model(
-  "Transcription",
-  transcriptionSchema
-);
 
 /* ────────────────────────────────────────────────────────── */
 /* Create uploads folder if not exists */
@@ -102,87 +86,56 @@ app.get("/", (req, res) => {
   });
 });
 
+app.use("/api/auth", authRoutes);
+
 /* ────────────────────────────────────────────────────────── */
 /* Upload Route */
 /* ────────────────────────────────────────────────────────── */
 
 app.post(
   "/upload",
+  authMiddleware,
   upload.single("audio"),
   async (req, res) => {
     try {
-      /* Check file */
-
       if (!req.file) {
         return res.status(400).json({
           message: "No audio file uploaded",
         });
       }
 
-      console.log("Uploaded File:");
-      console.log(req.file);
-
-      /* Read uploaded audio */
-
-      const audioBuffer = fs.readFileSync(
-        req.file.path
-      );
-
-      /* Detect actual mime type */
-
+      const audioBuffer = fs.readFileSync(req.file.path);
       const mimetype = req.file.mimetype;
 
-      console.log("Mime Type:", mimetype);
+      const response = await deepgram.transcription.preRecorded(
+        {
+          buffer: audioBuffer,
+          mimetype,
+        },
+        {
+          punctuate: true,
+          model: "nova",
+        }
+      );
 
-      /* Deepgram transcription */
+      const transcriptionText =
+        response.results.channels[0].alternatives[0].transcript;
 
-      const response =
-        await deepgram.transcription.preRecorded(
-          {
-            buffer: audioBuffer,
-
-            mimetype: mimetype,
-          },
-          {
-            punctuate: true,
-
-            model: "nova",
-          }
-        );
-
-      /* Get transcript */
-
-      const transcription =
-        response.results.channels[0]
-          .alternatives[0].transcript;
-
-      console.log("Transcript:", transcription);
-
-      /* Save to MongoDB */
-
-      const newTranscription =
-        new Transcription({
-          filename: req.file.filename,
-
-          transcription,
-        });
+      const newTranscription = new Transcription({
+        filename: req.file.filename,
+        transcription: transcriptionText,
+        user: req.user.id,
+      });
 
       await newTranscription.save();
-
-      /* Delete uploaded file */
-
       fs.unlinkSync(req.file.path);
-
-      /* Send response */
 
       res.json({
         message: "Transcription successful",
-
-        transcription,
+        transcription: transcriptionText,
       });
     } catch (error) {
-      console.log(error);
-
+      console.error(error);
       res.status(500).json({
         message: "Error generating transcription",
       });
@@ -190,19 +143,40 @@ app.post(
   }
 );
 
-app.get("/transcriptions", async (req, res) => {
+app.get("/transcriptions", authMiddleware, async (req, res) => {
   try {
-    const transcriptions =
-      await Transcription.find()
-        .sort({ createdAt: -1 });
+    const transcriptions = await Transcription.find({
+      user: req.user.id,
+    }).sort({ createdAt: -1 });
 
     res.json(transcriptions);
-
   } catch (error) {
-    console.log(error);
-
+    console.error(error);
     res.status(500).json({
       message: "Error fetching transcriptions",
+    });
+  }
+});
+
+app.delete("/transcriptions/:id", authMiddleware, async (req, res) => {
+  try {
+    const transcription = await Transcription.findOne({
+      _id: req.params.id,
+      user: req.user.id,
+    });
+
+    if (!transcription) {
+      return res.status(404).json({
+        message: "Transcript not found.",
+      });
+    }
+
+    await transcription.deleteOne();
+    res.json({ message: "Transcript deleted." });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: "Error deleting transcription.",
     });
   }
 });
