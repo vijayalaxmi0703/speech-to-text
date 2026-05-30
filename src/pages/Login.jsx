@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import Toast from "../components/Toast.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
-
+import { supabase } from "../lib/supabase";
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Login() {

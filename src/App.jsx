@@ -145,8 +145,6 @@ export default function App() {
 
       await fetchTranscriptions();
     } catch (err) {
-      console.error(err);
-
       let msg = "Something went wrong.";
 
       if (err.response) {
@@ -301,8 +299,6 @@ export default function App() {
 
       await fetchTranscriptions();
     } catch (err) {
-      console.error(err);
-
       showToast("Could not delete the transcript.", "error");
     } finally {
       setDeleteId(null);

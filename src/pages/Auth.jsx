@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { useAuth } from "../context/AuthContext.jsx";
+import { useAuth } from "../utils/context/AuthContext.jsx";
 import Toast from "../components/Toast.jsx";
 import { X } from "lucide-react";
-import api from "../utils/api.js";
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -22,6 +21,17 @@ export default function Auth({ mode = "signin" }) {
   const [showSignInPassword, setShowSignInPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
 
+  // FIX 3: Remember Me - load remembered email on mount
+  useEffect(() => {
+    const rememberedEmail = localStorage.getItem("remembered_email");
+    const rememberedFlag = localStorage.getItem("remember_me") === "true";
+
+    if (rememberedFlag && rememberedEmail) {
+      setSignInEmail(rememberedEmail);
+      setRememberMe(true);
+    }
+  }, []);
+
   // Sign Up state
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -32,20 +42,7 @@ export default function Auth({ mode = "signin" }) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
 
-  // OTP Forgot Password State
-  const [showOtpModal, setShowOtpModal] = useState(false);
-  const [otpStep, setOtpStep] = useState(1); // 1: Request, 2: Enter OTP, 3: Reset Password
-  const [otpMethod, setOtpMethod] = useState('email'); // 'email' or 'phone'
-  const [otpValue, setOtpValue] = useState('');
-  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', '']);
-  const [otpCountdown, setOtpCountdown] = useState(60);
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [resetToken, setResetToken] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(false);
-  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
-  const otpInputRefs = useRef([]);
+  // Forgot Password State - not used
 
   const clearErrors = () => setErrors({});
 
@@ -112,7 +109,17 @@ export default function Auth({ mode = "signin" }) {
 
     try {
       await login(signInEmail.trim(), signInPassword, rememberMe);
-      navigate("/");
+
+      // FIX 3: Remember Me logic
+      if (rememberMe) {
+        localStorage.setItem("remembered_email", signInEmail.toLowerCase().trim());
+        localStorage.setItem("remember_me", "true");
+      } else {
+        localStorage.removeItem("remembered_email");
+        localStorage.removeItem("remember_me");
+      }
+
+      navigate("/dashboard");
     } catch (error) {
       setToast({
         message: error.message || "Unable to sign in. Check your email and password.",
@@ -120,346 +127,49 @@ export default function Auth({ mode = "signin" }) {
       });
     }
   };
-
   const handleSignUpSubmit = async (e) => {
     e.preventDefault();
     clearErrors();
     if (!validateSignUp()) return;
 
+    setAuthLoading(true);
     try {
-      await register(`${firstName.trim()} ${lastName.trim()}`, signUpEmail.trim(), signUpPassword);
-      setToast({
-        message: "✓ Account created! Check your email to verify.",
-        type: "success",
-      });
-      setTimeout(() => navigate("/"), 2000);
+      const res = await register(
+        `${firstName.trim()} ${lastName.trim()}`,
+        signUpEmail.trim(),
+        signUpPassword
+      );
+
+      // FIX 1: Store token and user — same as login flow
+      localStorage.setItem("authToken", res.token);
+      localStorage.setItem("authUser", JSON.stringify(res.user));
+
+      // FIX 1: Update global auth context
+      setUser(res.user);
+
+      // FIX 1: Redirect immediately to dashboard — no toast, no delay
+      navigate("/dashboard");
     } catch (error) {
       setToast({
         message: error.message || "Unable to create account. Try again.",
         type: "error",
       });
+    } finally {
+      setAuthLoading(false);
     }
   };
 
   const handleForgotPassword = (e) => {
     e.preventDefault();
-    setShowOtpModal(true);
-    setOtpStep(1);
-    setOtpMethod('email');
-    setOtpValue(signInEmail.trim());
-  };
-
-  // OTP Modal Functions
-  const handleSendOtp = async () => {
-    if (!otpValue.trim()) {
-      setErrors({ otp: "Please enter an email address or phone number." });
-      return;
-    }
-
-    if (otpMethod === 'email' && !emailRegex.test(otpValue)) {
-      setErrors({ otp: "Please enter a valid email address." });
-      return;
-    }
-
-    setOtpLoading(true);
-    try {
-      await api.post('/api/auth/forgot-password', {
-        method: otpMethod,
-        value: otpValue,
-      });
-      setOtpStep(2);
-      setOtpDigits(['', '', '', '', '', '']);
-      setOtpCountdown(60);
-      startOtpCountdown();
-      setErrors({});
-    } catch (error) {
-      setErrors({ otp: error.response?.data?.message || "Failed to send OTP. Try again." });
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
-  const startOtpCountdown = () => {
-    setOtpCountdown(60);
-    const timer = setInterval(() => {
-      setOtpCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  };
-
-  const handleResendOtp = async () => {
-    if (otpCountdown > 0) return;
-    await handleSendOtp();
-  };
-
-  const handleOtpDigitChange = (index, value) => {
-    if (value.length > 1) {
-      value = value.slice(-1);
-    }
-    if (!/^\d*$/.test(value)) return;
-
-    const newDigits = [...otpDigits];
-    newDigits[index] = value;
-    setOtpDigits(newDigits);
-
-    if (value && index < 5) {
-      otpInputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleOtpKeyDown = (index, e) => {
-    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
-      otpInputRefs.current[index - 1]?.focus();
-    }
-  };
-
-  const handleOtpPaste = (e) => {
-    e.preventDefault();
-    const pastedData = e.clipboardData.getData('text').slice(0, 6);
-    if (/^\d+$/.test(pastedData)) {
-      const newDigits = [...otpDigits];
-      for (let i = 0; i < pastedData.length; i++) {
-        newDigits[i] = pastedData[i];
-      }
-      setOtpDigits(newDigits);
-      if (pastedData.length === 6) {
-        otpInputRefs.current[5]?.focus();
-      }
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    const otp = otpDigits.join('');
-    if (otp.length !== 6) {
-      setErrors({ otp: "Please enter the complete 6-digit OTP." });
-      return;
-    }
-
-    setOtpLoading(true);
-    try {
-      const response = await api.post('/api/auth/verify-otp', {
-        method: otpMethod,
-        value: otpValue,
-        otp,
-      });
-      setResetToken(response.data.resetToken);
-      setOtpStep(3);
-      setErrors({});
-    } catch (error) {
-      setErrors({ otp: error.response?.data?.message || "Invalid OTP. Please try again." });
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
-  const handleResetPassword = async () => {
-    if (!newPassword || newPassword.length < 8) {
-      setErrors({ newPassword: "Password must be at least 8 characters." });
-      return;
-    }
-    if (newPassword !== confirmNewPassword) {
-      setErrors({ confirmPassword: "Passwords do not match." });
-      return;
-    }
-
-    setOtpLoading(true);
-    try {
-      await api.post('/api/auth/reset-password', {
-        resetToken,
-        newPassword,
-      });
-      setToast({
-        message: "Password reset successfully! Redirecting to Sign In...",
-        type: "success",
-      });
-      setShowOtpModal(false);
-      setOtpStep(1);
-      setOtpDigits(['', '', '', '', '', '']);
-      setNewPassword('');
-      setConfirmNewPassword('');
-      setTimeout(() => setTab('signin'), 2000);
-    } catch (error) {
-      setErrors({ newPassword: error.response?.data?.message || "Failed to reset password. Try again." });
-    } finally {
-      setOtpLoading(false);
-    }
-  };
-
-  const closeOtpModal = () => {
-    setShowOtpModal(false);
-    setOtpStep(1);
-    setOtpDigits(['', '', '', '', '', '']);
-    setOtpValue('');
-    setNewPassword('');
-    setConfirmNewPassword('');
-    setErrors({});
+    // Forgot password not implemented - show message
+    setToast({
+      message: "Password reset feature coming soon. Please contact support.",
+      type: "info",
+    });
   };
 
   return (
     <div className="min-h-screen bg-bg-page text-text-primary font-dm-sans relative overflow-hidden">
-      {/* OTP Modal */}
-      {showOtpModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div 
-            className="absolute inset-0 bg-[rgba(6,14,26,0.85)] backdrop-blur-[8px]"
-            onClick={closeOtpModal}
-          />
-          <div className="relative bg-bg-card border border-border-dim rounded-[16px] p-9 w-full max-w-md">
-            <button
-              onClick={closeOtpModal}
-              className="absolute top-4 right-4 w-7 h-7 rounded-lg bg-bg-elevated flex items-center justify-center text-text-muted hover:text-text-primary transition-colors"
-            >
-              <X size={16} />
-            </button>
-
-            {/* Step Progress */}
-            <div className="flex items-center justify-center gap-2 mb-6">
-              {[1, 2, 3].map((step) => (
-                <div
-                  key={step}
-                  className={`w-2 h-2 rounded-full ${
-                    otpStep >= step ? 'bg-accent-purple' : 'bg-border-dim'
-                  }`}
-                />
-              ))}
-            </div>
-            <p className="text-center text-[12px] text-text-muted mb-6">
-              Step {otpStep} of 3
-            </p>
-
-            {/* Step 1: Request OTP */}
-            {otpStep === 1 && (
-              <div className="animate-fadeIn">
-                <h3 className="font-syne font-bold text-[18px] text-text-primary mb-2">
-                  Reset your password
-                </h3>
-                <p className="text-sm text-text-muted mb-6">
-                  Choose how you want to receive the verification code.
-                </p>
-
-                <div className="flex gap-3 mb-4">
-                  <button
-                    onClick={() => setOtpMethod('email')}
-                    className={`flex-1 p-4 rounded-lg border transition-all ${
-                      otpMethod === 'email'
-                        ? 'border-accent-purple bg-accent-purple/10 text-accent-purple'
-                        : 'border-border-dim bg-bg-input text-text-muted hover:border-accent-purple/50'
-                    }`}
-                  >
-                    <div className="text-2xl mb-1">📧</div>
-                    <div className="text-sm font-medium">Email</div>
-                  </button>
-                  <button
-                    onClick={() => setOtpMethod('phone')}
-                    className={`flex-1 p-4 rounded-lg border transition-all ${
-                      otpMethod === 'phone'
-                        ? 'border-accent-purple bg-accent-purple/10 text-accent-purple'
-                        : 'border-border-dim bg-bg-input text-text-muted hover:border-accent-purple/50'
-                    }`}
-                  >
-                    <div className="text-2xl mb-1">📱</div>
-                    <div className="text-sm font-medium">Phone</div>
-                  </button>
-                </div>
-
-                <div className="mb-4">
-                  <label className="block text-sm font-medium text-text-primary mb-2">
-                    {otpMethod === 'email' ? 'Email address' : 'Phone number'}
-                  </label>
-                  <input
-                    type={otpMethod === 'email' ? 'email' : 'tel'}
-                    value={otpValue}
-                    onChange={(e) => setOtpValue(e.target.value)}
-                    placeholder={otpMethod === 'email' ? 'yourname@company.com' : '+1 234 567 8900'}
-                    className="w-full h-[50px] px-4 rounded-[12px] bg-bg-input border border-border-dim text-text-primary placeholder-text-hint font-dm-sans text-[15px] focus:outline-none focus:border-border-focus focus:shadow-glow transition-all"
-                  />
-                  {errors.otp && (
-                    <p className="text-xs mt-1 text-error-border">{errors.otp}</p>
-                  )}
-                </div>
-
-                <button
-                  onClick={handleSendOtp}
-                  disabled={otpLoading}
-                  className="w-full h-[44px] bg-grad-primary text-white font-semibold rounded-lg hover:shadow-elevation transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {otpLoading ? 'Sending...' : 'Send OTP'}
-                </button>
-              </div>
-            )}
-
-            {/* Step 2: Enter OTP */}
-            {otpStep === 2 && (
-              <div className="animate-fadeIn">
-                <h3 className="font-syne font-bold text-[18px] text-text-primary mb-2">
-                  Enter verification code
-                </h3>
-                <p className="text-sm text-text-muted mb-6">
-                  We sent a 6-digit code to {otpMethod === 'email' ? 'your email' : 'your phone'}
-                </p>
-
-                <div className="flex gap-2 mb-4 justify-center">
-                  {otpDigits.map((digit, index) => (
-                    <input
-                      key={index}
-                      ref={(el) => (otpInputRefs.current[index] = el)}
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={1}
-                      value={digit}
-                      onChange={(e) => handleOtpDigitChange(index, e.target.value)}
-                      onKeyDown={(e) => handleOtpKeyDown(index, e)}
-                      onPaste={handleOtpPaste}
-                      className="w-[48px] h-[56px] text-center text-[24px] font-semibold rounded-lg bg-bg-input border border-border-dim text-text-primary focus:outline-none focus:border-border-focus focus:shadow-glow transition-all"
-                    />
-                  ))}
-                </div>
-
-                {errors.otp && (
-                  <p className="text-xs mb-4 text-center text-error-border">{errors.otp}</p>
-                )}
-
-                <div className="text-center mb-4">
-                  {otpCountdown > 0 ? (
-                    <p className="text-sm text-text-secondary">
-                      Resend OTP in {Math.floor(otpCountdown / 60)}:{String(otpCountdown % 60).padStart(2, '0')}
-                    </p>
-                  ) : (
-                    <button
-                      onClick={handleResendOtp}
-                      className="text-sm text-accent-purple hover:underline"
-                    >
-                      Resend OTP
-                    </button>
-                  )}
-                </div>
-
-                <button
-                  onClick={handleVerifyOtp}
-                  disabled={otpLoading}
-                  className="w-full h-[44px] bg-grad-primary text-white font-semibold rounded-lg hover:shadow-elevation transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {otpLoading ? 'Verifying...' : 'Verify OTP'}
-                </button>
-              </div>
-            )}
-
-            {/* Step 3: Reset Password */}
-            {otpStep === 3 && (
-              <div className="animate-fadeIn">
-                <h3 className="font-syne font-bold text-[18px] text-text-primary mb-2">
-                  Set new password
-                </h3>
-                <p className="text-sm text-text-muted mb-6">
-                  Create a strong password for your account.
-                </p>
-
-                <div className="mb-4">
                   <label className="block text-sm font-medium text-text-primary mb-2">
                     New password
                   </label>
@@ -660,10 +370,21 @@ export default function Auth({ mode = "signin" }) {
         </div>
 
         {/* Right Panel */}
-        <div className="flex items-center justify-center p-[48px_56px]">
+        <div className="flex items-center justify-center p-[24px_20px] lg:p-[48px_56px]">
           <div className="w-full max-w-[440px]">
+            {/* Mobile Header - Only visible on small screens */}
+            <div className="lg:hidden mb-6 flex items-center gap-3">
+              <div className="w-[38px] h-[38px] rounded-[10px] bg-grad-cta flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.91-3c-.49 0-.9.36-.98.85C16.52 14.2 14.47 16 12 16s-4.52-1.8-4.93-4.15c-.08-.49-.49-.85-.98-.85-.61 0-1.09.54-1 1.14.49 3 2.89 5.35 5.91 5.78V20c0 .55.45 1 1 1s1-.45 1-1v-2.08c3.02-.43 5.42-2.78 5.91-5.78.1-.6-.39-1.14-1-1.14z"/>
+                </svg>
+              </div>
+              <span className="font-syne font-bold text-[18px] text-text-primary">
+                VoiceScribe <span className="text-accent-purple">AI</span>
+              </span>
+            </div>
             {/* Auth Card */}
-            <div className="relative bg-bg-card border border-border-dim rounded-[18px] p-[40px_36px]">
+            <div className="relative bg-bg-card border border-border-dim rounded-[18px] p-[24px_20px] lg:p-[40px_36px]">
               {/* Top Edge Decoration */}
               <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-accent-purple/50 to-accent-cyan/40" />
 
@@ -682,87 +403,26 @@ export default function Auth({ mode = "signin" }) {
                 </div>
               )}
 
-              {/* Tab Row */}
-              <div className="flex bg-bg-input border border-border-dim rounded-[10px] p-1 gap-1 mb-8">
-                <button
-                  onClick={() => setTab("signin")}
-                  className={`flex-1 py-2 px-4 rounded-[8px] text-sm font-medium transition-all duration-300 ${
-                    tab === "signin"
-                      ? "bg-grad-cta text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)]"
-                      : "text-text-muted hover:text-text-primary"
-                  }`}
-                >
-                  Sign In
-                </button>
-                <button
-                  onClick={() => setTab("signup")}
-                  className={`flex-1 py-2 px-4 rounded-[8px] text-sm font-medium transition-all duration-300 ${
-                    tab === "signup"
-                      ? "bg-grad-cta text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)]"
-                      : "text-text-muted hover:text-text-primary"
-                  }`}
-                >
-                  Create Account
-                </button>
-              </div>
-
               {/* Sign In Form */}
               {tab === "signin" && (
                 <div className="animate-fadeIn">
-                  <div className="mb-6">
-                    <h2 className="font-syne font-bold text-[22px] text-text-primary mb-2">
+                  <div className="mb-5 lg:mb-6">
+                    <h2 className="font-syne font-bold text-[20px] lg:text-[22px] text-text-primary mb-2">
                       Welcome back
                     </h2>
-                    <p className="font-dm-sans text-[13.5px] text-text-muted">
+                    <p className="font-dm-sans text-[13px] lg:text-[13.5px] text-text-muted">
                       Access your AI transcription dashboard securely.
                     </p>
                   </div>
 
-                  {/* Social Buttons */}
-                  <div className="flex gap-3 mb-6">
-                    <button 
-                      onClick={() => window.location.href = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/auth/google`}
-                      className="flex-1 h-[44px] flex items-center justify-center gap-2 bg-white border border-[#DADCE0] rounded-lg text-[#3C4043] hover:bg-[#F8F9FA] hover:shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-all"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 18 18">
-                        <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-                        <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                        <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
-                        <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
-                      </svg>
-                      <span className="text-sm font-medium">Continue with Google</span>
-                    </button>
-                    <button 
-                      onClick={() => window.location.href = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/auth/microsoft`}
-                      className="flex-1 h-[44px] flex items-center justify-center gap-2 bg-white border border-[#DADCE0] rounded-lg text-[#3C4043] hover:bg-[#F8F9FA] hover:shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-all"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 21 21">
-                        <rect x="1" y="1" width="9" height="9" fill="#F25022"/>
-                        <rect x="11" y="1" width="9" height="9" fill="#7FBA00"/>
-                        <rect x="1" y="11" width="9" height="9" fill="#00A4EF"/>
-                        <rect x="11" y="11" width="9" height="9" fill="#FFB900"/>
-                      </svg>
-                      <span className="text-sm font-medium">Continue with Microsoft</span>
-                    </button>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="flex-1 h-px bg-border-dim" />
-                    <span className="text-[11.5px] uppercase tracking-[0.04em] text-text-hint">
-                      OR CONTINUE WITH EMAIL
-                    </span>
-                    <div className="flex-1 h-px bg-border-dim" />
-                  </div>
-
-                  <form onSubmit={handleSignInSubmit} className="space-y-5">
+                  <form onSubmit={handleSignInSubmit} className="space-y-4 lg:space-y-5">
                     {/* Email Field */}
                     <div>
                       <label className="block text-sm font-medium text-text-primary mb-2">
                         Email address
                       </label>
                       <div className="relative">
-                        <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                        <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                           </svg>
@@ -772,12 +432,12 @@ export default function Auth({ mode = "signin" }) {
                           value={signInEmail}
                           onChange={(e) => setSignInEmail(e.target.value)}
                           placeholder="yourname@company.com"
-                          className={`w-full h-[50px] pl-[42px] pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                          className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-3 lg:pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                             errors.email ? "border-error-border" : "border-border-dim focus:border-border-focus focus:shadow-glow"
                           }`}
                         />
                       </div>
-                      <p className={`text-xs mt-1 ${errors.email ? "text-error-border" : "text-text-hint"}`}>
+                      <p className={`text-[11px] lg:text-xs mt-1 ${errors.email ? "text-error-border" : "text-text-hint"}`}>
                         {errors.email || "Secure email login for your private workspace."}
                       </p>
                     </div>
@@ -789,15 +449,15 @@ export default function Auth({ mode = "signin" }) {
                         <button
                           type="button"
                           onClick={handleForgotPassword}
-                          className="text-sm text-accent-sky hover:underline"
+                          className="text-[13px] lg:text-sm text-accent-sky hover:underline"
                         >
                           Forgot password?
                         </button>
                       </div>
                       <div className="relative">
-                        <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                        <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v10a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                           </svg>
                         </div>
                         <input
@@ -805,14 +465,14 @@ export default function Auth({ mode = "signin" }) {
                           value={signInPassword}
                           onChange={(e) => setSignInPassword(e.target.value)}
                           placeholder="••••••••••"
-                          className={`w-full h-[50px] pl-[42px] pr-[44px] rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                          className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-[38px] lg:pr-[44px] rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                             errors.password ? "border-error-border" : "border-border-dim focus:border-border-focus focus:shadow-glow"
                           }`}
                         />
                         <button
                           type="button"
                           onClick={() => setShowSignInPassword(!showSignInPassword)}
-                          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+                          className="absolute right-[12px] lg:right-[14px] top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
                         >
                           {showSignInPassword ? (
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -826,54 +486,69 @@ export default function Auth({ mode = "signin" }) {
                           )}
                         </button>
                       </div>
-                      <p className={`text-xs mt-1 ${errors.password ? "text-error-border" : "text-text-hint"}`}>
+                      <p className={`text-[11px] lg:text-xs mt-1 ${errors.password ? "text-error-border" : "text-text-hint"}`}>
                         {errors.password || "Minimum 8 characters recommended."}
                       </p>
-                    </div>
 
-                    {/* Remember Me */}
-                    <div className="flex items-center gap-3">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            checked={rememberMe}
-                            onChange={(e) => setRememberMe(e.target.checked)}
-                            className="sr-only"
-                          />
-                          <div className={`w-[18px] h-[18px] rounded-[5px] border transition-all ${
-                            rememberMe ? "bg-accent-purple border-accent-purple" : "bg-bg-input border-border-dim"
-                          }`}>
-                            {rememberMe && (
-                              <svg className="w-3 h-3 text-white absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                              </svg>
-                            )}
+                      {/* Remember Me */}
+                      <div className="flex items-center gap-2 lg:gap-3 mt-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <div className="relative">
+                            <input
+                              type="checkbox"
+                              checked={rememberMe}
+                              onChange={(e) => setRememberMe(e.target.checked)}
+                              className="sr-only"
+                            />
+                            <div className={`w-[16px] lg:w-[18px] h-[16px] lg:h-[18px] rounded-[5px] border transition-all ${
+                              rememberMe ? "bg-accent-purple border-accent-purple" : "bg-bg-input border-border-dim"
+                            }`}>
+                              {rememberMe && (
+                                <svg className="w-3 h-3 text-white absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" fill="currentColor" viewBox="0 0 20 20">
+                                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                </svg>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <span className="text-sm text-text-primary">Remember me for 30 days</span>
-                      </label>
+                          <span className="text-[13px] lg:text-sm text-text-primary">Remember me</span>
+                        </label>
+                      </div>
                     </div>
 
-                    {/* Submit Button */}
-                    <button
-                      type="submit"
-                      disabled={authLoading}
-                      className="w-full h-[52px] bg-grad-cta text-white font-syne font-semibold rounded-[12px] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_8px_28px_rgba(139,92,246,0.45)] hover:brightness-[1.08] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:brightness-85"
-                    >
-                      {authLoading ? "Signing in…" : "Sign In to Dashboard"}
-                    </button>
+                  {/* Submit Button */}
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full h-[48px] lg:h-[52px] bg-grad-cta text-white font-syne font-semibold rounded-[12px] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_8px_28px_rgba(139,92,246,0.45)] hover:brightness-[1.08] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:brightness-85"
+                  >
+                    {authLoading ? "Signing in…" : "Sign In to Dashboard"}
+                  </button>
                   </form>
 
                   {/* Footer */}
-                  <div className="mt-6 text-center text-sm text-text-muted">
-                    Don't have an account?{" "}
-                    <button
-                      onClick={() => setTab("signup")}
-                      className="text-accent-purple hover:underline font-medium"
-                    >
-                      Create one free
-                    </button>
+                  <div className="mt-5 lg:mt-6 pt-5 lg:pt-6 border-t border-border-dim">
+                    <div className="flex bg-bg-input border border-border-dim rounded-[10px] p-1 gap-1">
+                      <button
+                        onClick={() => setTab("signin")}
+                        className={`flex-1 py-2 px-3 lg:px-4 rounded-[8px] text-[13px] lg:text-sm font-medium transition-all duration-300 ${
+                          tab === "signin"
+                            ? "bg-grad-cta text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)]"
+                            : "text-text-muted hover:text-text-primary"
+                        }`}
+                      >
+                        Sign In
+                      </button>
+                      <button
+                        onClick={() => setTab("signup")}
+                        className={`flex-1 py-2 px-3 lg:px-4 rounded-[8px] text-[13px] lg:text-sm font-medium transition-all duration-300 ${
+                          tab === "signup"
+                            ? "bg-grad-cta text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)]"
+                            : "text-text-muted hover:text-text-primary"
+                        }`}
+                      >
+                        Create Account
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -881,61 +556,24 @@ export default function Auth({ mode = "signin" }) {
               {/* Sign Up Form */}
               {tab === "signup" && (
                 <div className="animate-fadeIn">
-                  <div className="mb-6">
-                    <h2 className="font-syne font-bold text-[22px] text-text-primary mb-2">
+                  <div className="mb-5 lg:mb-6">
+                    <h2 className="font-syne font-bold text-[20px] lg:text-[22px] text-text-primary mb-2">
                       Create your account
                     </h2>
-                    <p className="font-dm-sans text-[13.5px] text-text-muted">
+                    <p className="font-dm-sans text-[13px] lg:text-[13.5px] text-text-muted">
                       Start transcribing for free — no credit card required.
                     </p>
                   </div>
 
-                  {/* Social Buttons */}
-                  <div className="flex gap-3 mb-6">
-                    <button 
-                      onClick={() => window.location.href = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/auth/google`}
-                      className="flex-1 h-[44px] flex items-center justify-center gap-2 bg-white border border-[#DADCE0] rounded-lg text-[#3C4043] hover:bg-[#F8F9FA] hover:shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-all"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 18 18">
-                        <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-                        <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                        <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
-                        <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
-                      </svg>
-                      <span className="text-sm font-medium">Continue with Google</span>
-                    </button>
-                    <button 
-                      onClick={() => window.location.href = `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/auth/microsoft`}
-                      className="flex-1 h-[44px] flex items-center justify-center gap-2 bg-white border border-[#DADCE0] rounded-lg text-[#3C4043] hover:bg-[#F8F9FA] hover:shadow-[0_1px_3px_rgba(0,0,0,0.2)] transition-all"
-                    >
-                      <svg width="18" height="18" viewBox="0 0 21 21">
-                        <rect x="1" y="1" width="9" height="9" fill="#F25022"/>
-                        <rect x="11" y="1" width="9" height="9" fill="#7FBA00"/>
-                        <rect x="1" y="11" width="9" height="9" fill="#00A4EF"/>
-                        <rect x="11" y="11" width="9" height="9" fill="#FFB900"/>
-                      </svg>
-                      <span className="text-sm font-medium">Continue with Microsoft</span>
-                    </button>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="flex-1 h-px bg-border-dim" />
-                    <span className="text-[11.5px] uppercase tracking-[0.04em] text-text-hint">
-                      OR CONTINUE WITH EMAIL
-                    </span>
-                    <div className="flex-1 h-px bg-border-dim" />
-                  </div>
-
-                  <form onSubmit={handleSignUpSubmit} className="space-y-5">
+                  <form onSubmit={handleSignUpSubmit} className="space-y-4 lg:space-y-5">
                     {/* Name Row */}
-                    <div className="grid grid-cols-2 gap-[14px]">
+                    <div className="grid grid-cols-2 gap-[10px] lg:gap-[14px]">
                       <div>
                         <label className="block text-sm font-medium text-text-primary mb-2">
                           First name
                         </label>
                         <div className="relative">
-                          <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                          <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                             </svg>
@@ -945,19 +583,19 @@ export default function Auth({ mode = "signin" }) {
                             value={firstName}
                             onChange={(e) => setFirstName(e.target.value)}
                             placeholder="Jane"
-                            className={`w-full h-[50px] pl-[42px] pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                            className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-3 lg:pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                               errors.firstName ? "border-error-border" : "border-border-dim focus:border-border-focus focus:shadow-glow"
                             }`}
                           />
                         </div>
-                        {errors.firstName && <p className="text-xs mt-1 text-error-border">{errors.firstName}</p>}
+                        {errors.firstName && <p className="text-[11px] lg:text-xs mt-1 text-error-border">{errors.firstName}</p>}
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-text-primary mb-2">
                           Last name
                         </label>
                         <div className="relative">
-                          <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                          <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                             </svg>
@@ -967,12 +605,12 @@ export default function Auth({ mode = "signin" }) {
                             value={lastName}
                             onChange={(e) => setLastName(e.target.value)}
                             placeholder="Doe"
-                            className={`w-full h-[50px] pl-[42px] pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                            className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-3 lg:pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                               errors.lastName ? "border-error-border" : "border-border-dim focus:border-border-focus focus:shadow-glow"
                             }`}
                           />
                         </div>
-                        {errors.lastName && <p className="text-xs mt-1 text-error-border">{errors.lastName}</p>}
+                        {errors.lastName && <p className="text-[11px] lg:text-xs mt-1 text-error-border">{errors.lastName}</p>}
                       </div>
                     </div>
 
@@ -982,7 +620,7 @@ export default function Auth({ mode = "signin" }) {
                         Email address
                       </label>
                       <div className="relative">
-                        <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                        <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                           </svg>
@@ -992,12 +630,12 @@ export default function Auth({ mode = "signin" }) {
                           value={signUpEmail}
                           onChange={(e) => setSignUpEmail(e.target.value)}
                           placeholder="yourname@company.com"
-                          className={`w-full h-[50px] pl-[42px] pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                          className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-3 lg:pr-4 rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                             errors.email ? "border-error-border" : "border-border-dim focus:border-border-focus focus:shadow-glow"
                           }`}
                         />
                       </div>
-                      <p className={`text-xs mt-1 ${errors.email ? "text-error-border" : "text-text-hint"}`}>
+                      <p className={`text-[11px] lg:text-xs mt-1 ${errors.email ? "text-error-border" : "text-text-hint"}`}>
                         {errors.email || "We'll send a verification link to this address."}
                       </p>
                     </div>
@@ -1008,7 +646,7 @@ export default function Auth({ mode = "signin" }) {
                         Create password
                       </label>
                       <div className="relative">
-                        <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                        <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                           </svg>
@@ -1018,14 +656,14 @@ export default function Auth({ mode = "signin" }) {
                           value={signUpPassword}
                           onChange={(e) => setSignUpPassword(e.target.value)}
                           placeholder="••••••••••"
-                          className={`w-full h-[50px] pl-[42px] pr-[44px] rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                          className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-[38px] lg:pr-[44px] rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                             errors.password ? "border-error-border" : "border-border-dim focus:border-border-focus focus:shadow-glow"
                           }`}
                         />
                         <button
                           type="button"
                           onClick={() => setShowSignUpPassword(!showSignUpPassword)}
-                          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+                          className="absolute right-[12px] lg:right-[14px] top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
                         >
                           {showSignUpPassword ? (
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1057,7 +695,7 @@ export default function Auth({ mode = "signin" }) {
                           />
                         ))}
                       </div>
-                      <p className={`text-xs mt-1 ${
+                      <p className={`text-[11px] lg:text-xs mt-1 ${
                         passwordStrength === 0
                           ? "text-text-hint"
                           : passwordStrength === 1
@@ -1080,7 +718,7 @@ export default function Auth({ mode = "signin" }) {
                         Confirm password
                       </label>
                       <div className="relative">
-                        <div className="absolute left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
+                        <div className="absolute left-[12px] lg:left-[14px] top-1/2 -translate-y-1/2 text-text-muted">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                           </svg>
@@ -1090,7 +728,7 @@ export default function Auth({ mode = "signin" }) {
                           value={confirmPassword}
                           onChange={(e) => setConfirmPassword(e.target.value)}
                           placeholder="••••••••••"
-                          className={`w-full h-[50px] pl-[42px] pr-[44px] rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
+                          className={`w-full h-[46px] lg:h-[50px] pl-[38px] lg:pl-[42px] pr-[38px] lg:pr-[44px] rounded-[12px] bg-bg-input border text-text-primary placeholder-text-hint font-dm-sans text-[14px] lg:text-[15px] transition-all duration-[0.22s] ease-[cubic-bezier(0.4,0,0.2,1)] focus:outline-none ${
                             confirmPassword && signUpPassword !== confirmPassword
                               ? "border-error-border"
                               : confirmPassword && signUpPassword === confirmPassword
@@ -1101,7 +739,7 @@ export default function Auth({ mode = "signin" }) {
                         <button
                           type="button"
                           onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
+                          className="absolute right-[12px] lg:right-[14px] top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
                         >
                           {showConfirmPassword ? (
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1115,7 +753,7 @@ export default function Auth({ mode = "signin" }) {
                           )}
                         </button>
                       </div>
-                      <p className={`text-xs mt-1 ${
+                      <p className={`text-[11px] lg:text-xs mt-1 ${
                         !confirmPassword
                           ? "text-text-hint"
                           : signUpPassword === confirmPassword
@@ -1129,7 +767,7 @@ export default function Auth({ mode = "signin" }) {
                     </div>
 
                     {/* Terms Checkbox */}
-                    <div className="flex items-start gap-3">
+                    <div className="flex items-start gap-2 lg:gap-3">
                       <label className="flex items-start gap-2 cursor-pointer">
                         <div className="relative mt-0.5">
                           <input
@@ -1138,7 +776,7 @@ export default function Auth({ mode = "signin" }) {
                             onChange={(e) => setAgreeTerms(e.target.checked)}
                             className="sr-only"
                           />
-                          <div className={`w-[18px] h-[18px] rounded-[5px] border transition-all ${
+                          <div className={`w-[16px] lg:w-[18px] h-[16px] lg:h-[18px] rounded-[5px] border transition-all ${
                             agreeTerms ? "bg-accent-purple border-accent-purple" : "bg-bg-input border-border-dim"
                           }`}>
                             {agreeTerms && (
@@ -1148,7 +786,7 @@ export default function Auth({ mode = "signin" }) {
                             )}
                           </div>
                         </div>
-                        <span className="text-sm text-text-muted">
+                        <span className="text-[13px] lg:text-sm text-text-muted">
                           I agree to the{" "}
                           <Link to="/terms" className="text-accent-sky hover:underline">
                             Terms of Service
@@ -1160,27 +798,42 @@ export default function Auth({ mode = "signin" }) {
                         </span>
                       </label>
                     </div>
-                    {errors.terms && <p className="text-xs text-error-border">{errors.terms}</p>}
+                    {errors.terms && <p className="text-[11px] lg:text-xs text-error-border">{errors.terms}</p>}
 
                     {/* Submit Button */}
                     <button
                       type="submit"
                       disabled={authLoading}
-                      className="w-full h-[52px] bg-grad-cta text-white font-syne font-semibold rounded-[12px] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_8px_28px_rgba(139,92,246,0.45)] hover:brightness-[1.08] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:brightness-85"
+                      className="w-full h-[48px] lg:h-[52px] bg-grad-cta text-white font-syne font-semibold rounded-[12px] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_8px_28px_rgba(139,92,246,0.45)] hover:brightness-[1.08] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:brightness-85"
                     >
                       {authLoading ? "Creating account…" : "Create Free Account"}
                     </button>
                   </form>
 
                   {/* Footer */}
-                  <div className="mt-6 text-center text-sm text-text-muted">
-                    Already have an account?{" "}
-                    <button
-                      onClick={() => setTab("signin")}
-                      className="text-accent-purple hover:underline font-medium"
-                    >
-                      Sign in here
-                    </button>
+                  <div className="mt-5 lg:mt-6 pt-5 lg:pt-6 border-t border-border-dim">
+                    <div className="flex bg-bg-input border border-border-dim rounded-[10px] p-1 gap-1">
+                      <button
+                        onClick={() => setTab("signin")}
+                        className={`flex-1 py-2 px-3 lg:px-4 rounded-[8px] text-[13px] lg:text-sm font-medium transition-all duration-300 ${
+                          tab === "signin"
+                            ? "bg-grad-cta text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)]"
+                            : "text-text-muted hover:text-text-primary"
+                        }`}
+                      >
+                        Sign In
+                      </button>
+                      <button
+                        onClick={() => setTab("signup")}
+                        className={`flex-1 py-2 px-3 lg:px-4 rounded-[8px] text-[13px] lg:text-sm font-medium transition-all duration-300 ${
+                          tab === "signup"
+                            ? "bg-grad-cta text-white shadow-[0_4px_16px_rgba(139,92,246,0.3)]"
+                            : "text-text-muted hover:text-text-primary"
+                        }`}
+                      >
+                        Create Account
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

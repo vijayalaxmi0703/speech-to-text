@@ -9,13 +9,10 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const token =
-      localStorage.getItem("authToken") || sessionStorage.getItem("authToken");
-
+    const token = localStorage.getItem("authToken") || sessionStorage.getItem("authToken");
     if (token && config.headers) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-
     return config;
   },
   (error) => Promise.reject(error)
@@ -31,6 +28,7 @@ api.interceptors.response.use(
       localStorage.removeItem("authUser");
       sessionStorage.removeItem("authToken");
       sessionStorage.removeItem("authUser");
+      window.location.href = "/auth";
     }
 
     return Promise.reject(new Error(message));
