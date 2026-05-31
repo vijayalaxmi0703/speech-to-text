@@ -125,4 +125,5 @@ All protected routes require `Authorization: Bearer <token>`.
 ---
 
 ## License
+
 Built by **Vijaya Laxmi**

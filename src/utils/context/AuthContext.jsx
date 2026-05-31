@@ -45,8 +45,12 @@ export function AuthProvider({ children }) {
     setAuthLoading(true);
     try {
       const res = await api.post("/api/auth/login", { email, password });
+      console.log("Login response:", res.data);
       saveSession(res.data.token, res.data.user, remember);
       return res.data;
+    } catch (error) {
+      console.error("Login API error:", error);
+      throw error;
     } finally {
       setAuthLoading(false);
     }
@@ -56,6 +60,10 @@ export function AuthProvider({ children }) {
     setAuthLoading(true);
     try {
       const res = await api.post("/api/auth/register", { name, email, password });
+      // Auto-login after registration
+      if (res.data.token) {
+        saveSession(res.data.token, res.data.user, true);
+      }
       return res.data;
     } finally {
       setAuthLoading(false);

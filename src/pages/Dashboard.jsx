@@ -56,10 +56,13 @@ const LANGUAGES = [
 ];
 
 export default function Dashboard() {
+  console.log("Dashboard Rendered");
+
   const [selectedFile, setSelectedFile] = useState(null);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState(null);
   const [transcription, setTranscription] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [isFileTranscribing, setIsFileTranscribing] = useState(false);
+  const [isLiveTranscribing, setIsLiveTranscribing] = useState(false);
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
   const [copied, setCopied] = useState(false);
@@ -73,9 +76,10 @@ export default function Dashboard() {
   const [speakerDiarization, setSpeakerDiarization] = useState(false);
   const [wordTimestamps, setWordTimestamps] = useState(false);
   const [autoSave, setAutoSave] = useState(true);
+  const [recordedAudioFile, setRecordedAudioFile] = useState(null);
 
   // Camera & Subtitle State
-  const [cameraOn, setCameraOn] = useState(true);
+  const [cameraOn, setCameraOn] = useState(false);
   const [mediaStream, setMediaStream] = useState(null);
   const [liveSubtitle, setLiveSubtitle] = useState('');
   const [finalTranscript, setFinalTranscript] = useState('');
@@ -84,13 +88,16 @@ export default function Dashboard() {
   const [micMuted, setMicMuted] = useState(false);
 
   const { user, logout } = useAuth();
+  console.log("Dashboard rendered, user:", user);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
   const videoRef = useRef(null);
+  const streamRef = useRef(null);
   const recognitionRef = useRef(null);
 
   useEffect(() => {
+    console.log("Dashboard useEffect running");
     const checkBackend = async () => {
       try {
         await api.get("/", { timeout: 4500 });
@@ -105,16 +112,47 @@ export default function Dashboard() {
 
     return () => {
       clearInterval(timerRef.current);
-      mediaStream?.getTracks().forEach(t => t.stop());
-      recognitionRef.current?.stop();
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        try { recognitionRef.current.stop(); } catch(e) {}
+      }
     };
-  }, [mediaStream]);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!mediaStream || !videoRef.current) return;
+    const video = videoRef.current;
+    if (video.srcObject === mediaStream) {
+      console.log('Stream already attached, skipping');
+      return;
+    }
+
+    console.log('Attaching stream to video (useEffect)');
+    video.srcObject = mediaStream;
+    video.muted = true;
+    video.playsInline = true;
+
+    const play = () => video.play().catch(e => console.error('play:', e));
+    if (video.readyState >= 1) {
+      play();
+    } else {
+      video.onloadedmetadata = play;
+    }
+
+    return () => { video.onloadedmetadata = null; };
+  }, [mediaStream]);
 
   const showToast = (message, type = "success") => {
     setToast({ message, type });
@@ -168,8 +206,8 @@ export default function Dashboard() {
     }
   };
 
-  const uploadAudio = async (audioFile) => {
-    setLoading(true);
+  const uploadAudio = async (audioFile, setLoadingState) => {
+    setLoadingState(true);
     setError(null);
     setTranscription("");
 
@@ -204,8 +242,21 @@ export default function Dashboard() {
       setError(msg);
       showToast(msg, "error");
     } finally {
-      setLoading(false);
+      setLoadingState(false);
     }
+  };
+
+  const handleFileTranscribe = async () => {
+    if (!selectedFile) return;
+    await uploadAudio(selectedFile, setIsFileTranscribing);
+  };
+
+  const handleLiveTranscribe = async () => {
+    if (!recordedAudioFile) {
+      showToast("Please record audio first.", "error");
+      return;
+    }
+    await uploadAudio(recordedAudioFile, setIsLiveTranscribing);
   };
 
   const handleUpload = () => {
@@ -219,7 +270,7 @@ export default function Dashboard() {
       return;
     }
 
-    uploadAudio(selectedFile);
+    handleFileTranscribe();
   };
 
   const handleFileSelect = (file) => {
@@ -266,6 +317,8 @@ export default function Dashboard() {
   };
 
   const startSpeechRecognition = (audioStream) => {
+    console.log("SpeechRecognition exists:", !!window.webkitSpeechRecognition || !!window.SpeechRecognition);
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
       setSubtitlesUnavailable(true);
@@ -283,6 +336,7 @@ export default function Dashboard() {
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
+        console.log("LIVE TRANSCRIPT:", transcript);
         if (event.results[i].isFinal) {
           final += transcript + ' ';
         } else {
@@ -290,7 +344,8 @@ export default function Dashboard() {
         }
       }
 
-      setLiveSubtitle(interim || final.trim().split(' ').slice(-8).join(' '));
+      const subtitleText = interim || final.trim().split(' ').slice(-8).join(' ');
+      setLiveSubtitle(subtitleText);
 
       if (final) {
         setFinalTranscript(prev => prev + final);
@@ -298,169 +353,256 @@ export default function Dashboard() {
     };
 
     recognition.onerror = (event) => {
+      console.error("Speech recognition error:", event.error);
       if (event.error !== 'no-speech') {
         // Speech recognition error - handled silently
       }
+    };
+
+    recognition.onstart = () => {
+      console.log("Speech recognition started");
     };
 
     recognitionRef.current = recognition;
     recognition.start();
   };
 
+  const startLiveSubtitles = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return; // silently skip if browser doesn't support it
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event) => {
+      let text = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        text += event.results[i][0].transcript;
+      }
+      // Show only last 10 words
+      const words = text.trim().split(' ');
+      setLiveSubtitle(words.slice(-10).join(' '));
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error !== 'no-speech') console.warn('Speech recognition:', e.error);
+    };
+
+    recognition.onend = () => {
+      // Restart if still recording
+      if (recognitionRef.current === recognition) {
+        try { recognition.start(); } catch(e) {}
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try { recognition.start(); } catch(e) {}
+  };
+
+  const startSubtitles = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (e) => {
+      let text = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        text += e.results[i][0].transcript;
+      }
+      setLiveSubtitle(text.trim().split(' ').slice(-10).join(' '));
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error !== 'no-speech') console.warn('Speech recognition error:', e.error);
+    };
+
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition) {
+        try { recognition.start(); } catch(e) {}
+      }
+    };
+
+    recognitionRef.current = recognition;
+    try { recognition.start(); } catch(e) {}
+  };
+
   const startRecording = async () => {
-    if (!checkSupport()) {
-      showToast('Browser not supported. Please use Chrome, Edge, or Safari.', 'error');
-      return;
+    console.log("START RECORDING");
+
+    
+    // Request mic + camera together in one call  
+    let stream;
+    try {
+      console.log("Requesting audio: true, video: true");
+      stream = await navigator.mediaDevices.getUserMedia({
+         audio: {
+           echoCancellation: true,
+           noiseSuppression: true,
+           autoGainControl: true
+         },
+         video: {
+           facingMode: "user"
+         }
+       });
+      console.log("STREAM ACQUIRED");
+      console.log("VIDEO TRACKS:", stream.getVideoTracks().length);
+      console.log("AUDIO TRACKS:", stream.getAudioTracks().length);
+    } catch (e1) {
+      console.error("AUDIO+VIDEO FAILED:", e1.name, e1.message);
+      // Camera failed or not present — try audio only
+      try {
+        console.log("Trying audio only");
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false
+        });
+        console.log("AUDIO-ONLY STREAM ACQUIRED");
+      } catch (e2) {
+        console.error("AUDIO-ONLY FAILED:", e2.name, e2.message);
+        showToast(`Error: ${e2.name} - ${e2.message}`, 'error');
+        return;
+      }
     }
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user'
-        }
-      });
+    streamRef.current = stream;
+    setMediaStream(stream);
+    audioChunksRef.current = [];
 
-      setMediaStream(stream);
+    // Set recording state FIRST so video element mounts in DOM
+    setRecording(true);
+    setRecordingTime(0);
+    setLiveSubtitle('');
+    setFinalTranscript('');
 
+    const hasVideo = stream.getVideoTracks().length > 0;
+    if (hasVideo) {
+      setCameraOn(true);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        videoRef.current.muted = true;
+        videoRef.current.playsInline = true;
+        videoRef.current.play().catch(e => console.error('play:', e));
       }
+    }
 
-      const audioStream = new MediaStream(stream.getAudioTracks());
-      const recorder = new MediaRecorder(audioStream, {
-        mimeType: "audio/webm;codecs=opus",
-      });
+    // MediaRecorder on audio tracks only
+    const audioOnly = new MediaStream(stream.getAudioTracks());
+    const recorder = new MediaRecorder(audioOnly, {
+      mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg',
+    });
+    mediaRecorderRef.current = recorder;
 
-      mediaRecorderRef.current = recorder;
-      audioChunksRef.current = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
+    recorder.onstop = () => {
+      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const audioFile = new File([blob], `recording-${Date.now()}.webm`, { type: 'audio/webm' });
+      setRecordedAudioFile(audioFile);
+      setSelectedFile(audioFile);
+      setAudioPreviewUrl(URL.createObjectURL(blob));
+    };
 
-      recorder.onstop = async () => {
-        const blob = new Blob(audioChunksRef.current, {
-          type: "audio/webm",
-        });
+    recorder.start(250);
+    timerRef.current = window.setInterval(() => setRecordingTime(p => p + 1), 1000);
 
-        const audioFile = new File([blob], `recording-${Date.now()}.webm`, {
-          type: "audio/webm",
-        });
+    // Start live subtitles
+   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SR) {
+  const recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+  recognition.maxAlternatives = 1;
 
-        setSelectedFile(audioFile);
-        setAudioPreviewUrl(URL.createObjectURL(blob));
-        await uploadAudio(audioFile);
-        stream.getTracks().forEach((track) => track.stop());
-      };
+  recognition.onresult = (e) => {
+    let interim = '';
+    let final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t + ' ';
+      else interim += t;
+    }
+    setLiveSubtitle((interim || final).trim());
+    if (final) setFinalTranscript(prev => prev + final);
+  };
 
-      recorder.start();
-      startSpeechRecognition(audioStream);
-      setRecording(true);
-      setCameraOn(true);
-      setRecordingTime(0);
-      setLiveSubtitle('');
-      setFinalTranscript('');
-      setCameraError(null);
-      timerRef.current = window.setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
-    } catch (err) {
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        setCameraError('camera_denied');
-        showToast('Camera access denied. Recording audio only.', 'error');
-        try {
-          const audioOnlyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          setMediaStream(audioOnlyStream);
-          setCameraOn(false);
+  recognition.onerror = (e) => {
+    // If permission denied — kill restart loop completely
+    if (e.error === 'not-allowed') {
+      recognitionRef.current = null;
+      return;
+    }
+    if (e.error !== 'no-speech') console.warn('SR error:', e.error);
+  };
 
-          const audioStream = new MediaStream(audioOnlyStream.getAudioTracks());
-          const recorder = new MediaRecorder(audioStream, {
-            mimeType: "audio/webm;codecs=opus",
-          });
-
-          mediaRecorderRef.current = recorder;
-          audioChunksRef.current = [];
-
-          recorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-              audioChunksRef.current.push(event.data);
-            }
-          };
-
-          recorder.onstop = async () => {
-            const blob = new Blob(audioChunksRef.current, {
-              type: "audio/webm",
-            });
-
-            const audioFile = new File([blob], `recording-${Date.now()}.webm`, {
-              type: "audio/webm",
-            });
-
-            setSelectedFile(audioFile);
-            setAudioPreviewUrl(URL.createObjectURL(blob));
-            await uploadAudio(audioFile);
-            audioOnlyStream.getTracks().forEach((track) => track.stop());
-          };
-
-          recorder.start();
-          startSpeechRecognition(audioStream);
-          setRecording(true);
-          setRecordingTime(0);
-          setLiveSubtitle('');
-          setFinalTranscript('');
-          timerRef.current = window.setInterval(() => {
-            setRecordingTime((prev) => prev + 1);
-          }, 1000);
-        } catch (audioErr) {
-          console.error(audioErr);
-          showToast('Microphone access denied. Please allow access and retry.', 'error');
-        }
-      } else {
-        showToast('Failed to start recording. Please try again.', 'error');
+  // KEY FIX — 500ms delay + active recording check stops the popup loop
+  recognition.onend = () => {
+    if (recognitionRef.current !== recognition) return;
+    setTimeout(() => {
+      if (recognitionRef.current === recognition) {
+        try { recognition.start(); } catch(e) {}
       }
+    }, 500);
+  };
+
+  recognitionRef.current = recognition;
+  try { recognition.start(); } catch(e) {}
     }
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current?.state !== "inactive") {
+    console.log("STOP RECORDING");
+    if (mediaRecorderRef.current?.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
-    recognitionRef.current?.stop();
-    mediaStream?.getTracks().forEach(track => track.stop());
-    setMediaStream(null);
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      console.log("Clearing video srcObject");
+      videoRef.current.srcObject = null;
+    }
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      try { recognitionRef.current.stop(); } catch(e) {}
+      recognitionRef.current = null;
+    }
+    clearInterval(timerRef.current);
     setRecording(false);
     setCameraOn(false);
     setMicMuted(false);
     setLiveSubtitle('');
-    clearInterval(timerRef.current);
-
-    if (finalTranscript.trim()) {
-      setTranscription(finalTranscript.trim());
-    }
+    setMediaStream(null);
+    if (finalTranscript.trim()) setTranscription(finalTranscript.trim());
+    console.log("STOP RECORDING COMPLETE");
   };
 
   const toggleCamera = () => {
-    if (!mediaStream) return;
-    mediaStream.getVideoTracks().forEach(track => {
-      track.enabled = !track.enabled;
-    });
+    if (!streamRef.current) return;
+    streamRef.current.getVideoTracks().forEach(t => { t.enabled = !t.enabled; });
     setCameraOn(prev => !prev);
   };
 
   const toggleMic = () => {
-    if (!mediaStream) return;
-    mediaStream.getAudioTracks().forEach(track => {
-      track.enabled = !track.enabled;
-    });
-    setMicMuted(prev => !prev);
-  };
+  if (!streamRef.current) return;
 
+  const newState = !micMuted;
+
+  streamRef.current.getAudioTracks().forEach(t => {
+    t.enabled = !newState;
+  });
+
+  setMicMuted(newState);
+};
   const copyTranscription = async (text = transcription) => {
     if (!text) return;
 
@@ -543,6 +685,8 @@ export default function Dashboard() {
 
   const isBackendOnline = serverStatus === "Backend Connected";
 
+  console.log("Rendering dashboard UI");
+
   return (
     <div className="h-screen bg-saas-base text-saas-text-primary font-inter overflow-hidden">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
@@ -610,45 +754,51 @@ export default function Dashboard() {
                     onClick={() => loadTranscription(item)}
                     className="group relative px-3 py-2 rounded-lg hover:bg-saas-elevated cursor-pointer border-l-2 border-transparent hover:border-saas-accent-blue transition-all"
                   >
-                    <div className="flex items-start gap-2">
-                      <AudioLines size={16} className="text-saas-text-secondary mt-0.5 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {item.filename || `Recording ${item._id?.slice(-6)}`}
-                        </p>
-                        <p className="text-xs text-saas-text-secondary">
-                          {item.relativeTime}
-                        </p>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <AudioLines size={16} className="text-saas-text-secondary flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-semibold text-saas-text-primary">
+                            {item.filename || `Recording ${item._id?.slice(-6)}`}
+                          </p>
+                          <p className="text-xs text-saas-text-secondary">
+                            {item.relativeTime}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            copyTranscription(item.transcription);
+                          }}
+                          className="p-1.5 rounded hover:bg-saas-overlay text-saas-text-secondary hover:text-saas-accent-blue"
+                          title="Copy"
+                        >
+                          <Copy size={14} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteTranscription(item._id);
+                          }}
+                          className="p-1.5 rounded hover:bg-saas-overlay text-saas-text-secondary hover:text-saas-accent-red"
+                          title="Delete"
+                          disabled={deleteId === item._id}
+                        >
+                          {deleteId === item._id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            <Trash2 size={14} />
+                          )}
+                        </button>
                       </div>
                     </div>
-                    {/* Hover Actions */}
-                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          copyTranscription(item.transcription);
-                        }}
-                        className="p-1.5 rounded hover:bg-saas-overlay text-saas-text-secondary hover:text-saas-accent-blue"
-                        title="Copy"
-                      >
-                        <Copy size={14} />
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteTranscription(item._id);
-                        }}
-                        className="p-1.5 rounded hover:bg-saas-overlay text-saas-text-secondary hover:text-saas-accent-red"
-                        title="Delete"
-                        disabled={deleteId === item._id}
-                      >
-                        {deleteId === item._id ? (
-                          <Loader2 size={14} className="animate-spin" />
-                        ) : (
-                          <Trash2 size={14} />
-                        )}
-                      </button>
-                    </div>
+                    {item.transcription && (
+                      <p className="text-xs text-saas-text-secondary mt-2 line-clamp-3 break-words">
+                        {item.transcription}
+                      </p>
+                    )}
                   </div>
                 ))
               ) : (
@@ -690,7 +840,7 @@ export default function Dashboard() {
                 onFileSelect={handleFileSelect}
                 selectedFile={selectedFile}
                 onClear={handleClearFile}
-                disabled={loading || recording}
+                disabled={isFileTranscribing || recording}
               />
 
               {audioPreviewUrl && !recording && (
@@ -702,11 +852,11 @@ export default function Dashboard() {
               {/* Transcribe Audio Button (after Audio Preview) */}
               {audioPreviewUrl && !recording && (
                 <button
-                  onClick={handleUpload}
-                  disabled={!selectedFile || loading || recording || !isBackendOnline}
+                  onClick={handleFileTranscribe}
+                  disabled={!selectedFile || isFileTranscribing || recording || !isBackendOnline}
                   className="w-full h-[44px] mt-4 bg-grad-primary text-white font-semibold text-[15px] rounded-lg hover:-translate-y-1 hover:shadow-elevation hover:brightness-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center gap-2"
                 >
-                  {loading ? (
+                  {isFileTranscribing ? (
                     <>
                       <Loader2 size={18} className="animate-spin" />
                       Processing…
@@ -728,153 +878,180 @@ export default function Dashboard() {
                       <Mic size={20} className="text-white" />
                     </div>
                     <div>
-                      <p className="text-[14px] font-semibold text-saas-text-primary">
-                        Live Recording
-                      </p>
+                      <p className="text-[14px] font-semibold text-saas-text-primary">Live Recording</p>
                       <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${recording ? "bg-saas-accent-red animate-pulse" : "bg-saas-accent-emerald"}`} />
+                        <span className={`w-2 h-2 rounded-full ${recording ? 'bg-red-500 animate-pulse' : 'bg-emerald-500'}`} />
                         <span className="text-xs text-saas-text-secondary">
-                          {recording ? `Recording • ${formatTime(recordingTime)}` : "Ready"}
+                          {recording ? `Recording • ${formatTime(recordingTime)}` : 'Ready'}
                         </span>
                       </div>
                     </div>
                   </div>
                   <button
                     onClick={recording ? stopRecording : startRecording}
-                    disabled={loading || !isBackendOnline}
-                    className="w-10 h-10 rounded-full bg-saas-accent-blue flex items-center justify-center text-white hover:shadow-elevation transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={isFileTranscribing || isLiveTranscribing}
+                    className="w-10 h-10 rounded-full bg-saas-accent-blue flex items-center justify-center text-white hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {recording ? <MicOff size={20} /> : <Mic size={20} />}
                   </button>
                 </div>
 
-                {/* Recording Panel with Video & Subtitles */}
-                <div
-                  className={`recording-panel overflow-hidden transition-all duration-350 ${
-                    recording ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'
-                  }`}
-                >
-                  {/* Camera Error Banner */}
-                  {cameraError === 'camera_denied' && (
-                    <div className="mb-4 p-3 rounded-lg bg-saas-accent-amber/10 border border-saas-accent-amber/30 flex items-center gap-2">
-                      <AlertTriangle size={16} className="text-saas-accent-amber" />
-                      <p className="text-xs text-saas-accent-amber">
-                        Camera access denied — recording audio only
-                      </p>
-                    </div>
-                  )}
+                {recording && (
+                  <div style={{
+                    position: 'relative',
+                    width: '100%',
+                    aspectRatio: '16/9',
+                    minHeight: '240px',
+                    backgroundColor: '#0A0F1E',
+                    borderRadius: '12px',
+                    overflow: 'hidden',
+                    border: '1px solid #1E2D4A',
+                    marginBottom: '16px'
+                  }}>
+                  <video
+                    ref={el => {
+                      videoRef.current = el;
+                      if (el && streamRef.current && el.srcObject !== streamRef.current) {
+                        console.log('Attaching stream to video (callback ref)');
+                        el.srcObject = streamRef.current;
+                        el.muted = true;
+                        el.playsInline = true;
+                        el.play().catch(e => console.error('play:', e));
+                      }
+                    }}
+                    autoPlay
+                    muted
+                    playsInline
+                    style={{
+                      display: 'block',
+                      opacity: cameraOn ? 1 : 0,
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      transform: 'scaleX(-1)'
+                    }}
+                  />
 
-                  {/* Subtitles Unavailable Banner */}
-                  {subtitlesUnavailable && (
-                    <div className="mb-4 p-3 rounded-lg bg-saas-accent-amber/10 border border-saas-accent-amber/30 flex items-center gap-2">
-                      <AlertTriangle size={16} className="text-saas-accent-amber" />
-                      <p className="text-xs text-saas-accent-amber">
-                        Live subtitles unavailable in this browser — transcript will appear after recording stops.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Video Container */}
-                  <div className="relative w-full aspect-video bg-saas-base rounded-xl overflow-hidden border border-saas-border-subtle mb-4">
-                    {cameraOn && mediaStream?.getVideoTracks()?.length > 0 ? (
-                      <>
-                        <video
-                          ref={videoRef}
-                          autoPlay
-                          muted
-                          playsInline
-                          className="w-full h-full object-cover"
-                          style={{ transform: 'scaleX(-1)' }}
-                        />
-                        {/* Recording Indicator */}
-                        <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur-sm rounded-md px-3 py-1.5">
-                          <span className="w-2 h-2 rounded-full bg-saas-accent-red animate-pulse" />
-                          <span className="text-xs font-medium text-white">REC</span>
-                        </div>
-                        {/* Subtitle Overlay */}
-                        {liveSubtitle && (
-                          <div className="absolute bottom-0 left-0 right-0 p-4 pb-5 bg-gradient-to-t from-black/82 to-transparent flex justify-center items-end min-h-[64px]">
-                            <p className="text-[17px] font-medium text-white text-center leading-relaxed max-w-[85%] bg-black/45 px-4 py-1.5 rounded-lg backdrop-blur-sm shadow-lg subtitle-animate" style={{ textShadow: '0 1px 4px rgba(0,0,0,0.9), 0 0 12px rgba(0,0,0,0.6)' }}>
-                              {liveSubtitle}
-                            </p>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      /* Camera Off Placeholder */
-                      <div className="w-full h-full bg-saas-surface flex flex-col items-center justify-center gap-3 relative">
-                        <div className="w-16 h-16 rounded-full bg-saas-elevated flex items-center justify-center text-2xl font-semibold text-saas-text-secondary">
-                          {user?.name?.charAt(0).toUpperCase() || 'U'}
-                        </div>
-                        <span className="text-sm text-saas-text-secondary">Camera Off</span>
-                        {/* Subtitle still shows when camera off */}
-                        {liveSubtitle && (
-                          <div className="absolute bottom-4 bg-black/60 backdrop-blur-sm rounded-md px-4 py-2">
-                            <p className="text-sm text-white text-center">{liveSubtitle}</p>
-                          </div>
-                        )}
+                  {!cameraOn && (
+                    <div style={{
+                      position: 'absolute', inset: 0,
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: 'center', justifyContent: 'center', gap: '12px',
+                      backgroundColor: '#0F1629'
+                    }}>
+                      <div style={{
+                        width: 64, height: 64, borderRadius: '50%',
+                        backgroundColor: '#141D35',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 24, fontWeight: 600, color: '#64748B'
+                      }}>
+                        {user?.name?.charAt(0).toUpperCase() || 'U'}
                       </div>
-                    )}
+                      <span style={{ color: '#64748B', fontSize: 14 }}>Camera Off</span>
+                    </div>
+                  )}
+
+                  {/* REC badge */}
+                  <div style={{
+                    position: 'absolute', top: 12, left: 12, zIndex: 10,
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    backgroundColor: 'rgba(0,0,0,0.6)',
+                    backdropFilter: 'blur(4px)',
+                    borderRadius: 6, padding: '4px 10px'
+                  }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: '50%',
+                      backgroundColor: '#ef4444',
+                      animation: 'pulse 1.2s infinite'
+                    }} />
+                    <span style={{ color: '#fff', fontSize: 12, fontWeight: 500 }}>REC</span>
                   </div>
 
-                  {/* Control Bar */}
-                  <div className="flex items-center justify-center gap-2 mb-4">
-                    <button
-                      onClick={toggleMic}
-                      className="h-10 px-4 bg-saas-elevated border border-saas-border-subtle rounded-lg flex items-center gap-2 hover:border-saas-accent-blue transition-all"
-                    >
-                      {micMuted ? (
-                        <>
-                          <MicOff size={16} className="text-saas-accent-red" />
-                          <span className="text-xs font-medium text-saas-text-primary">Mic Muted</span>
-                        </>
-                      ) : (
-                        <>
-                          <Mic size={16} className="text-saas-accent-blue" />
-                          <span className="text-xs font-medium text-saas-text-primary">Mic On</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      onClick={toggleCamera}
-                      disabled={!mediaStream?.getVideoTracks()?.length}
-                      className="h-10 px-4 bg-saas-elevated border border-saas-border-subtle rounded-lg flex items-center gap-2 hover:border-saas-accent-blue transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {cameraOn ? (
-                        <>
-                          <Camera size={16} className="text-saas-accent-blue" />
-                          <span className="text-xs font-medium text-saas-text-primary">Camera On</span>
-                        </>
-                      ) : (
-                        <>
-                          <CameraOff size={16} className="text-saas-text-secondary" />
-                          <span className="text-xs font-medium text-saas-text-primary">Camera Off</span>
-                        </>
-                      )}
-                    </button>
-                    <button
-                      onClick={stopRecording}
-                      className="h-10 px-5 bg-saas-accent-red/12 border border-saas-accent-red/30 rounded-lg flex items-center gap-2 hover:bg-saas-accent-red/20 hover:border-saas-accent-red/50 transition-all"
-                    >
-                      <Square size={16} className="text-saas-accent-red" />
-                      <span className="text-xs font-medium text-saas-accent-red">Stop Recording</span>
-                    </button>
-                  </div>
-
-                  {/* Live Waveform */}
-                  <div className="flex items-center justify-center gap-1 h-8">
-                    {[...Array(5)].map((_, i) => (
-                      <div
-                        key={i}
-                        className="w-1 bg-saas-accent-blue rounded-full animate-pulse"
-                        style={{
-                          height: `${20 + Math.random() * 20}px`,
-                          animationDelay: `${i * 0.1}s`,
-                        }}
-                      />
-                    ))}
-                  </div>
+                  {/* Subtitle overlay */}
+                  {liveSubtitle && (
+                    <div style={{
+                      position: 'absolute', bottom: 0, left: 0, right: 0,
+                      padding: '10px 16px 14px',
+                      background: 'linear-gradient(transparent, rgba(0,0,0,0.88))',
+                      display: 'flex', justifyContent: 'center', pointerEvents: 'none'
+                    }}>
+                      <span style={{
+                        fontFamily: 'DM Sans, sans-serif', fontSize: 16, fontWeight: 500,
+                        color: '#ffffff', background: 'rgba(0,0,0,0.55)',
+                        padding: '4px 14px', borderRadius: 6,
+                        textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+                        maxWidth: '90%', textAlign: 'center'
+                      }}>
+                        {liveSubtitle}
+                      </span>
+                    </div>
+                  )}
                 </div>
+                )}
+
+                {recording && (
+                  <div>
+                    {/* Control Bar */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
+                      <button
+                        onClick={toggleMic}
+                        style={{
+                          height: 40, padding: '0 16px',
+                          backgroundColor: '#141D35', border: '1px solid #1E2D4A',
+                          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
+                          cursor: 'pointer', color: '#F1F5F9'
+                        }}
+                      >
+                        {micMuted
+                          ? <><MicOff size={16} color="#ef4444" /><span style={{ fontSize: 12 }}>Mic Muted</span></>
+                          : <><Mic size={16} color="#3B82F6" /><span style={{ fontSize: 12 }}>Mic On</span></>
+                        }
+                      </button>
+                      <button
+                        onClick={toggleCamera}
+                        style={{
+                          height: 40, padding: '0 16px',
+                          backgroundColor: '#141D35', border: '1px solid #1E2D4A',
+                          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
+                          cursor: 'pointer', color: '#F1F5F9'
+                        }}
+                      >
+                        {cameraOn
+                          ? <><Camera size={16} color="#3B82F6" /><span style={{ fontSize: 12 }}>Camera On</span></>
+                          : <><CameraOff size={16} color="#64748B" /><span style={{ fontSize: 12 }}>Camera Off</span></>
+                        }
+                      </button>
+                      <button
+                        onClick={stopRecording}
+                        style={{
+                          height: 40, padding: '0 20px',
+                          backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                          borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <Square size={16} color="#ef4444" />
+                        <span style={{ fontSize: 12, color: '#ef4444' }}>Stop Recording</span>
+                      </button>
+                    </div>
+
+                    {/* Waveform bars — no vertical lines */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, height: 32 }}>
+                      {[16, 24, 32, 24, 16].map((h, i) => (
+                        <div
+                          key={i}
+                          style={{
+                            width: 4, height: h, borderRadius: 999,
+                            backgroundColor: '#3B82F6',
+                            animation: 'pulse 1s ease-in-out infinite',
+                            animationDelay: `${i * 0.12}s` 
+                          }}
+                        />
+                      ))}
+                    </div>
+                    
+                  </div>
+                )}
 
                 {!recording && (
                   <div className="rounded-lg border border-saas-border-subtle bg-saas-base p-4">
@@ -903,11 +1080,11 @@ export default function Dashboard() {
 
               {/* Transcribe Button */}
               <button
-                onClick={handleUpload}
-                disabled={!selectedFile || loading || recording || !isBackendOnline}
+                onClick={handleLiveTranscribe}
+                disabled={!recordedAudioFile || isLiveTranscribing || recording || !isBackendOnline}
                 className="w-full h-[44px] mt-4 bg-grad-primary text-white font-semibold text-[15px] rounded-lg hover:-translate-y-1 hover:shadow-elevation hover:brightness-105 active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center gap-2"
               >
-                {loading ? (
+                {isLiveTranscribing ? (
                   <>
                     <Loader2 size={18} className="animate-spin" />
                     Processing…
@@ -970,7 +1147,7 @@ export default function Dashboard() {
               </div>
 
               <div className="bg-saas-surface border border-saas-border-subtle rounded-[10px] p-6 min-h-[220px]">
-                {loading ? (
+                {isFileTranscribing || isLiveTranscribing ? (
                   <div className="flex items-center gap-3 text-saas-text-secondary">
                     <Loader2 size={18} className="animate-spin" />
                     Processing audio...

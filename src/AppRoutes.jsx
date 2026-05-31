@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./utils/context/AuthContext.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Auth from "./pages/Auth.jsx";
 
@@ -21,21 +22,24 @@ export default function AppRoutes() {
     <Routes>
       <Route
         path="/login"
-        element={user ? <Navigate to="/" replace /> : <Auth mode="signin" />}
+        element={user ? <Navigate to="/dashboard" replace /> : <Auth mode="signin" />}
       />
       <Route
         path="/register"
-        element={user ? <Navigate to="/" replace /> : <Auth mode="register" />}
+        element={user ? <Navigate to="/dashboard" replace /> : <Auth mode="register" />}
       />
       <Route
-        path="/"
+        path="/dashboard"
         element={
           <ProtectedRoute>
-            <Dashboard />
+            <ErrorBoundary>
+              <Dashboard />
+            </ErrorBoundary>
           </ProtectedRoute>
         }
       />
-      <Route path="*" element={<Navigate to={user ? "/" : "/login"} replace />} />
+      <Route path="/" element={<Navigate to={user ? "/dashboard" : "/login"} replace />} />
+      <Route path="*" element={<Navigate to={user ? "/dashboard" : "/login"} replace />} />
     </Routes>
   );
 }
