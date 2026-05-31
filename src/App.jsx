@@ -19,7 +19,7 @@ import AudioPreview from "./components/AudioPreview.jsx";
 import HistoryCard from "./components/HistoryCard.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 
-const API_URL = "http://localhost:5000";
+const API_URL = " https://speech-to-text-bz58.onrender.com";
 
 const ALLOWED_TYPES = [
   "audio/mpeg",

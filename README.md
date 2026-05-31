@@ -48,7 +48,7 @@ cd ../frontend && npm install
 
 ```bash
 # Terminal 1 — backend
-cd backend && npm run dev       # http://localhost:5000
+cd backend && npm run dev       #  https://speech-to-text-bz58.onrender.com
 
 # Terminal 2 — frontend
 cd frontend && npm run dev      # http://localhost:5173
@@ -65,23 +65,6 @@ MONGO_URI=your_mongodb_atlas_connection_string
 PORT=5000
 JWT_SECRET=your_min_32_char_random_secret
 
-DEEPGRAM_API_KEY=your_deepgram_key
-
-# Google OAuth
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-GOOGLE_CALLBACK_URL=http://localhost:5000/api/auth/google/callback
-
-# Twilio SMS OTP
-TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_VERIFY_SID=VAxxxxxxxxxxxxxxxx
-
-# Email OTP
-EMAIL_HOST=smtp.resend.com
-EMAIL_USER=resend
-EMAIL_PASS=your_resend_api_key
-EMAIL_FROM=noreply@yourdomain.com
 ```
 
 ### `frontend/.env`
